@@ -93,13 +93,14 @@ NumericVector compute_U_Gg_global_cpp(NumericVector U_Gg_plus,
                                        const double N0_weight) {
   // Compute weighted combination of U_Gg for switchers in and out
   const int n = U_Gg_plus.size();
-  NumericVector result(n);
-
+  
   const double total = N1_weight + N0_weight;
+
   if (total == 0) {
-    std::fill(result.begin(), result.end(), NA_REAL);
-    return result;
+    return NumericVector(n, NA_REAL);
   }
+
+  NumericVector result(n);
 
   const double w_plus = N1_weight / total;
   const double w_minus = N0_weight / total;
@@ -120,18 +121,22 @@ List compute_clustered_variance_cpp(NumericVector U_Gg_var,
   // Compute clustered variance
   const int n = U_Gg_var.size();
 
-  // Step 1: Multiply by first_obs_by_gp_XX
-  NumericVector U_masked(n);
-  for (int i = 0; i < n; i++) {
-    U_masked[i] = U_Gg_var[i] * first_obs_gp[i];
-  }
-
-  // Step 2: Sum within clusters
   std::unordered_map<int, double> cluster_sums;
-  for (int i = 0; i < n; i++) {
-    if (!IntegerVector::is_na(cluster[i])) {
-      if (!NumericVector::is_na(U_masked[i])) {
-        cluster_sums[cluster[i]] += U_masked[i];
+
+  {
+    // Step 1: Multiply by first_obs_by_gp_XX
+    NumericVector U_masked(n);
+    for (int i = 0; i < n; i++) {
+      U_masked[i] = U_Gg_var[i] * first_obs_gp[i];
+    }
+
+    // Step 2: Sum within clusters
+    
+    for (int i = 0; i < n; i++) {
+      if (!IntegerVector::is_na(cluster[i])) {
+        if (!NumericVector::is_na(U_masked[i])) {
+          cluster_sums[cluster[i]] += U_masked[i];
+        }
       }
     }
   }
@@ -187,7 +192,6 @@ NumericMatrix initialize_effect_columns_cpp(const int nrow, const int l_XX, cons
   }
 
   NumericMatrix result(nrow, ncols);
-  std::fill(result.begin(), result.end(), 0.0);
 
   return result;
 }
@@ -214,7 +218,7 @@ NumericVector compute_delta_D_g_cpp(NumericMatrix delta_plus,
                                      const int l_XX) {
   // Compute delta_D_g_XX by combining plus and minus matrices
   const int n = delta_plus.nrow();
-  NumericVector result(n, 0.0);
+  NumericVector result(n);
 
   for (int i = 0; i < n; i++) {
     const int tag = switchers_tag[i];
@@ -329,10 +333,6 @@ NumericVector shift_by_group_cpp(NumericVector x, IntegerVector group, const int
 
   if (n == 0) return result;
 
-  int current_group = group[0]; // WHY DOES THIS VARIABLE EXIST? IT IS NEVER CALLED.
-  int group_start = 0; // WHY DOES THIS VARIABLE EXIST? IT IS NEVER CALLED.
-  int group_end = 0; // WHY DOES THIS VARIABLE EXIST? IT IS NEVER CALLED.
-
   // Find group boundaries
   std::vector<int> group_starts;
   std::vector<int> group_ends;
@@ -418,7 +418,7 @@ NumericVector conditional_sum_by_group_cpp(NumericVector x,
 NumericVector sum_by_group_cpp(NumericVector x, IntegerVector group) {
   // Simple sum of x by single group column
   const int n = x.size();
-  NumericVector result(n, 0.0);
+  NumericVector result(n);
 
   if (n == 0) return result;
 
@@ -493,9 +493,9 @@ List compute_U_Gg_core_cpp(NumericVector diff_y,
   // This is the main hot loop in did_multiplegt_dyn_core
 
   const int n = diff_y.size();
-  NumericVector U_Gg_temp(n, 0.0);
+  NumericVector U_Gg_temp(n);
   NumericVector U_Gg(n, NA_REAL);
-  NumericVector count_core(n, 0.0);
+  NumericVector count_core(n);
 
   if (N_inc == 0) {
     return List::create(
@@ -532,19 +532,21 @@ List compute_U_Gg_core_cpp(NumericVector diff_y,
     }
   }
 
-  // Sum by group
-  std::unordered_map<int, double> group_sums;
-  for (int j = 0; j < n; j++) {
-    if (!NumericVector::is_na(U_Gg_temp[j]) && !IntegerVector::is_na(group[j])) {
-      group_sums[group[j]] += U_Gg_temp[j];
+  {
+    // Sum by group
+    std::unordered_map<int, double> group_sums;
+    for (int j = 0; j < n; j++) {
+      if (!NumericVector::is_na(U_Gg_temp[j]) && !IntegerVector::is_na(group[j])) {
+        group_sums[group[j]] += U_Gg_temp[j];
+      }
     }
-  }
 
-  // Assign group sums and multiply by first_obs
-  for (int j = 0; j < n; j++) {
-    if (!IntegerVector::is_na(group[j])) {
-      const double sum_val = group_sums[group[j]];
-      U_Gg[j] = sum_val * first_obs[j];
+    // Assign group sums and multiply by first_obs
+    for (int j = 0; j < n; j++) {
+      if (!IntegerVector::is_na(group[j])) {
+        const double sum_val = group_sums[group[j]];
+        U_Gg[j] = sum_val * first_obs[j];
+      }
     }
   }
 
@@ -591,7 +593,7 @@ NumericVector compute_U_Gg_var_temp_cpp(NumericVector diff_y,
   // Compute U_Gg_var_temp for variance estimation
 
   int n = diff_y.size();
-  NumericVector result(n, 0.0);
+  NumericVector result(n);
 
   if (N_inc == 0) return result;
 
@@ -742,7 +744,7 @@ IntegerVector count_unique_by_group_cpp(IntegerVector values,
     group3 = group3_.get();
   }
 
-  std::unordered_map<long long, std::unordered_set<int>> unique_values;
+  std::unordered_map<long long, std::unordered_set<int> > unique_values;
 
   // First pass: collect unique values
   for (int i = 0; i < n; i++) {
@@ -753,7 +755,7 @@ IntegerVector count_unique_by_group_cpp(IntegerVector values,
       } else {
         key = ((long long)group1[i] << 32) | group2[i];
       }
-      unique_values[key].insert(values[i]);
+      unique_values[key].emplace(values[i]);
     }
   }
 
@@ -892,6 +894,7 @@ List compute_all_variances_cpp(NumericMatrix U_Gg_var_in,
   const int n = U_Gg_var_in.nrow();
   NumericMatrix U_Gg_var_glob(n, l_XX);
   NumericVector SE_estimates(l_XX);
+  const double G_XX_sq = G_XX * G_XX;
 
   for (int i = 0; i < l_XX; i++) {
     const double N1 = N1_vec[i];
@@ -936,29 +939,34 @@ List compute_all_variances_cpp(NumericMatrix U_Gg_var_in,
       }
     } else {
       // Clustered case
-      // Step 1: Multiply by first_obs_by_gp
-      std::vector<double> U_masked(n);
-      for (int j = 0; j < n; j++) {
-        U_masked[j] = U_Gg_var_glob(j, i) * first_obs_by_gp[j];
-      }
-
-      // Step 2: Sum within clusters
       std::unordered_map<int, double> cluster_sums;
-      for (int j = 0; j < n; j++) {
-        if (!IntegerVector::is_na(cluster_XX[j]) && !NumericVector::is_na(U_masked[j])) {
-          cluster_sums[cluster_XX[j]] += U_masked[j];
+
+      {
+        // Step 1: Multiply by first_obs_by_gp
+        std::vector<double> U_masked(n);
+        for (int j = 0; j < n; j++) {
+          U_masked[j] = U_Gg_var_glob(j, i) * first_obs_by_gp[j];
+        }
+
+        // Step 2: Sum within clusters
+        for (int j = 0; j < n; j++) {
+          if (!IntegerVector::is_na(cluster_XX[j]) && !NumericVector::is_na(U_masked[j])) {
+            cluster_sums[cluster_XX[j]] += U_masked[j];
+          }
         }
       }
 
       // Step 3: Compute sum of squared cluster sums
-      std::unordered_set<int> counted_clusters;
-      for (int j = 0; j < n; j++) {
-        if (first_obs_by_clust[j] == 1 && !IntegerVector::is_na(cluster_XX[j])) {
-          const int clust = cluster_XX[j];
-          if (!counted_clusters.contains(clust)) {
-            const double cs = cluster_sums[clust];
-            sum_sq += cs * cs;
-            counted_clusters.emplace(clust);
+      {
+        std::unordered_set<int> counted_clusters;
+        for (int j = 0; j < n; j++) {
+          if (first_obs_by_clust[j] == 1 && !IntegerVector::is_na(cluster_XX[j])) {
+            const int clust = cluster_XX[j];
+            if (!counted_clusters.contains(clust)) {
+              const double cs = cluster_sums[clust];
+              sum_sq += cs * cs;
+              counted_clusters.emplace(clust);
+            }
           }
         }
       }
@@ -971,8 +979,7 @@ List compute_all_variances_cpp(NumericMatrix U_Gg_var_in,
       }
     }
 
-    const double variance = sum_sq / (G_XX * G_XX);
-    SE_estimates[i] = std::sqrt(variance);
+    SE_estimates[i] = std::sqrt(sum_sq / G_XX_sq);
   }
 
   return List::create(
@@ -1248,15 +1255,17 @@ List compute_avg_effect_cpp(NumericVector U_Gg_plus,
       }
     }
   } else {
-    std::vector<double> U_masked(n);
-    for (int j = 0; j < n; j++) {
-      U_masked[j] = U_Gg_var_global[j] * first_obs_by_gp[j];
-    }
-
     std::unordered_map<int, double> cluster_sums;
-    for (int j = 0; j < n; j++) {
-      if (!IntegerVector::is_na(cluster_XX[j]) && !NumericVector::is_na(U_masked[j])) {
-        cluster_sums[cluster_XX[j]] += U_masked[j];
+    {
+      std::vector<double> U_masked(n);
+      for (int j = 0; j < n; j++) {
+        U_masked[j] = U_Gg_var_global[j] * first_obs_by_gp[j];
+      }
+
+      for (int j = 0; j < n; j++) {
+        if (!IntegerVector::is_na(cluster_XX[j]) && !NumericVector::is_na(U_masked[j])) {
+          cluster_sums[cluster_XX[j]] += U_masked[j];
+        }
       }
     }
 
@@ -1273,8 +1282,7 @@ List compute_avg_effect_cpp(NumericVector U_Gg_plus,
     }
   }
 
-  const double variance = sum_sq / (G_XX * G_XX);
-  const double se_XX = std::sqrt(variance);
+  const double se_XX = std::sqrt(sum_sq / (G_XX * G_XX));
 
   return List::create(
     Named("delta_XX") = delta_XX,
@@ -1298,10 +1306,10 @@ List same_switchers_loop_cpp(NumericVector outcome,
   // Returns N_g_control_check_XX for each group
 
   const int n = outcome.size();
-  NumericVector N_g_control_check(n, 0.0);
+  NumericVector N_g_control_check(n);
 
   // Pre-sort indices by group for efficient lookup
-  std::unordered_map<int, std::vector<int>> group_indices;
+  std::unordered_map<int, std::vector<int> > group_indices;
   for (int i = 0; i < n; i++) {
     group_indices[group[i]].push_back(i);
   }
@@ -1320,68 +1328,74 @@ List same_switchers_loop_cpp(NumericVector outcome,
       }
     }
 
-    // Compute never_change_d_last
-    NumericVector never_change_last(n, NA_REAL);
-    for (int i = 0; i < n; i++) {
-      if (!NumericVector::is_na(diff_y_last[i]) && F_g[i] > time[i]) {
-        never_change_last[i] = 1.0;
-      }
-      if (only_never_switchers && F_g[i] > time[i] && F_g[i] < T_max + 1 && !NumericVector::is_na(diff_y_last[i])) {
-        never_change_last[i] = 0.0;
-      }
-    }
-
-    // Compute N_gt_control_last by (time, d_sq)
     std::unordered_map<std::pair<int, int>, double> control_sums;
-    for (int i = 0; i < n; i++) {
-      if (!NumericVector::is_na(never_change_last[i]) && !NumericVector::is_na(N_gt[i])) {
-        const auto key = std::make_pair(time[i], d_sq[i]);
-        control_sums[key] += never_change_last[i] * N_gt[i];
+    {
+      // Compute never_change_d_last
+      NumericVector never_change_last(n, NA_REAL);
+      for (int i = 0; i < n; i++) {
+        if (!NumericVector::is_na(diff_y_last[i]) && F_g[i] > time[i]) {
+          never_change_last[i] = 1.0;
+        }
+        if (only_never_switchers && F_g[i] > time[i] && F_g[i] < T_max + 1 && !NumericVector::is_na(diff_y_last[i])) {
+          never_change_last[i] = 0.0;
+        }
       }
-    }
 
-    NumericVector N_gt_control_last(n, 0.0);
-    for (int i = 0; i < n; i++) {
-      const auto key = std::make_pair(time[i], d_sq[i]);
-      auto it = control_sums.find(key);
-      if (it != control_sums.end()) {
-        N_gt_control_last[i] = it->second;
-      }
-    }
-
-    // Compute N_g_control_last_m (mean where time == F_g - 1 + q)
-    std::unordered_map<int, double> group_ctrl_sum;
-    std::unordered_map<int, int> group_ctrl_count;
-    for (int i = 0; i < n; i++) {
-      if (time[i] == F_g[i] - 1 + q) {
-        group_ctrl_sum[group[i]] += N_gt_control_last[i];
-        group_ctrl_count[group[i]]++;
+      // Compute N_gt_control_last by (time, d_sq)
+      for (int i = 0; i < n; i++) {
+        if (!NumericVector::is_na(never_change_last[i]) && !NumericVector::is_na(N_gt[i])) {
+          const auto key = std::make_pair(time[i], d_sq[i]);
+          control_sums[key] += never_change_last[i] * N_gt[i];
+        }
       }
     }
 
     NumericVector N_g_control_last_m(n, NA_REAL);
-    for (int i = 0; i < n; i++) {
-      auto it = group_ctrl_count.find(group[i]);
-      if (it != group_ctrl_count.end() && it->second > 0) {
-        N_g_control_last_m[i] = group_ctrl_sum[group[i]] / it->second;
+    {
+      NumericVector N_gt_control_last(n);
+      for (int i = 0; i < n; i++) {
+        const auto key = std::make_pair(time[i], d_sq[i]);
+        auto it = control_sums.find(key);
+        if (it != control_sums.end()) {
+          N_gt_control_last[i] = it->second;
+        }
+      }
+
+      // Compute N_g_control_last_m (mean where time == F_g - 1 + q)
+      std::unordered_map<int, double> group_ctrl_sum;
+      std::unordered_map<int, int> group_ctrl_count;
+      for (int i = 0; i < n; i++) {
+        if (time[i] == F_g[i] - 1 + q) {
+          group_ctrl_sum[group[i]] += N_gt_control_last[i];
+          group_ctrl_count[group[i]]++;
+        }
+      }
+
+      for (int i = 0; i < n; i++) {
+        auto it = group_ctrl_count.find(group[i]);
+        if (it != group_ctrl_count.end() && it->second > 0) {
+          N_g_control_last_m[i] = group_ctrl_sum[group[i]] / it->second;
+        }
       }
     }
 
     // Compute diff_y_relev (mean where time == F_g - 1 + q)
-    std::unordered_map<int, double> group_dy_sum;
-    std::unordered_map<int, int> group_dy_count;
-    for (int i = 0; i < n; i++) {
-      if (time[i] == F_g[i] - 1 + q && !NumericVector::is_na(diff_y_last[i])) {
-        group_dy_sum[group[i]] += diff_y_last[i];
-        group_dy_count[group[i]]++;
-      }
-    }
-
     NumericVector diff_y_relev(n, NA_REAL);
-    for (int i = 0; i < n; i++) {
-      auto it = group_dy_count.find(group[i]);
-      if (it != group_dy_count.end() && it->second > 0) {
-        diff_y_relev[i] = group_dy_sum[group[i]] / it->second;
+    {
+      std::unordered_map<int, double> group_dy_sum;
+      std::unordered_map<int, int> group_dy_count;
+      for (int i = 0; i < n; i++) {
+        if (time[i] == F_g[i] - 1 + q && !NumericVector::is_na(diff_y_last[i])) {
+          group_dy_sum[group[i]] += diff_y_last[i];
+          group_dy_count[group[i]]++;
+        }
+      }
+
+      for (int i = 0; i < n; i++) {
+        auto it = group_dy_count.find(group[i]);
+        if (it != group_dy_count.end() && it->second > 0) {
+          diff_y_relev[i] = group_dy_sum[group[i]] / it->second;
+        }
       }
     }
 
@@ -1409,7 +1423,7 @@ List bootstrap_prepare_groups_cpp(IntegerVector group) {
   const int n = group.size();
 
   // Find unique groups and their positions
-  std::unordered_map<int, std::vector<int>> group_indices;
+  std::unordered_map<int, std::vector<int> > group_indices;
   for (int i = 0; i < n; i++) {
     if (!IntegerVector::is_na(group[i])) {
       group_indices[group[i]].push_back(i);
@@ -1455,7 +1469,7 @@ IntegerVector bootstrap_sample_indices_cpp(List group_info) {
 
   for (int i = 0; i < n_groups; i++) {
     // Sample a random group index using R's RNG (0 to n_groups-1)
-    int sampled_group = (int)(R::runif(0.0, 1.0) * n_groups);
+    int sampled_group = (int)(R::runif(0.0, 1.0) * n_groups); // WHY USE THE R FUNCTION HERE INSTEAD OF C++ RNG?
     if (sampled_group >= n_groups) sampled_group = n_groups - 1;  // Edge case
 
     // Get all row indices for this group
@@ -1465,7 +1479,7 @@ IntegerVector bootstrap_sample_indices_cpp(List group_info) {
     }
   }
 
-  return IntegerVector(result.begin(), result.end());
+  return result;
 }
 
 // [[Rcpp::export]]
@@ -1511,8 +1525,7 @@ NumericMatrix bootstrap_extract_results_cpp(List results_list, const int n_boots
   // Extract effect estimates from a list of result objects into a matrix
   // Handles variable-length results gracefully
 
-  NumericMatrix result_matrix(n_bootstrap, n_effects);
-  std::fill(result_matrix.begin(), result_matrix.end(), NA_REAL);
+  NumericMatrix result_matrix(n_bootstrap, n_effects, NA_REAL);
 
   for (int i = 0; i < n_bootstrap; i++) {
     if (i < results_list.size()) {
