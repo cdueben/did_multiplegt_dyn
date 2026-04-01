@@ -1,7 +1,6 @@
 #include <Rcpp.h>
 #include <unordered_map>
-#include <map>
-#include <set>
+#include <unordered_set>
 #include <vector>
 #include <algorithm>
 #include <cmath>
@@ -128,7 +127,7 @@ List compute_clustered_variance_cpp(NumericVector U_Gg_var,
   }
 
   // Step 2: Sum within clusters
-  std::map<int, double> cluster_sums;
+  std::unordered_map<int, double> cluster_sums;
   for (int i = 0; i < n; i++) {
     if (!IntegerVector::is_na(cluster[i])) {
       if (!NumericVector::is_na(U_masked[i])) {
@@ -743,7 +742,7 @@ IntegerVector count_unique_by_group_cpp(IntegerVector values,
     group3 = group3_.get();
   }
 
-  std::unordered_map<long long, std::set<int>> unique_values; // THE SET COULD BE AN UNORDERED SET
+  std::unordered_map<long long, std::unordered_set<int>> unique_values;
 
   // First pass: collect unique values
   for (int i = 0; i < n; i++) {
@@ -944,7 +943,7 @@ List compute_all_variances_cpp(NumericMatrix U_Gg_var_in,
       }
 
       // Step 2: Sum within clusters
-      std::map<int, double> cluster_sums;
+      std::unordered_map<int, double> cluster_sums;
       for (int j = 0; j < n; j++) {
         if (!IntegerVector::is_na(cluster_XX[j]) && !NumericVector::is_na(U_masked[j])) {
           cluster_sums[cluster_XX[j]] += U_masked[j];
@@ -952,14 +951,14 @@ List compute_all_variances_cpp(NumericMatrix U_Gg_var_in,
       }
 
       // Step 3: Compute sum of squared cluster sums
-      std::set<int> counted_clusters;
+      std::unordered_set<int> counted_clusters;
       for (int j = 0; j < n; j++) {
         if (first_obs_by_clust[j] == 1 && !IntegerVector::is_na(cluster_XX[j])) {
           const int clust = cluster_XX[j];
-          if (counted_clusters.find(clust) == counted_clusters.end()) {
+          if (!counted_clusters.contains(clust)) {
             const double cs = cluster_sums[clust];
             sum_sq += cs * cs;
-            counted_clusters.insert(clust);
+            counted_clusters.emplace(clust);
           }
         }
       }
@@ -1100,21 +1099,21 @@ List compute_placebo_effects_and_variances_cpp(
         U_masked[j] = U_Gg_var_glob_pl(j, i) * first_obs_by_gp[j];
       }
 
-      std::map<int, double> cluster_sums;
+      std::unordered_map<int, double> cluster_sums;
       for (int j = 0; j < n; j++) {
         if (!IntegerVector::is_na(cluster_XX[j]) && !NumericVector::is_na(U_masked[j])) {
           cluster_sums[cluster_XX[j]] += U_masked[j];
         }
       }
 
-      std::set<int> counted_clusters;
+      std::unordered_set<int> counted_clusters;
       for (int j = 0; j < n; j++) {
         if (first_obs_by_clust[j] == 1 && !IntegerVector::is_na(cluster_XX[j])) {
           const int clust = cluster_XX[j];
-          if (counted_clusters.find(clust) == counted_clusters.end()) {
+          if (!counted_clusters.contains(clust)) {
             const double cs = cluster_sums[clust];
             sum_sq += cs * cs;
-            counted_clusters.insert(clust);
+            counted_clusters.emplace(clust);
           }
         }
       }
@@ -1254,21 +1253,21 @@ List compute_avg_effect_cpp(NumericVector U_Gg_plus,
       U_masked[j] = U_Gg_var_global[j] * first_obs_by_gp[j];
     }
 
-    std::map<int, double> cluster_sums;
+    std::unordered_map<int, double> cluster_sums;
     for (int j = 0; j < n; j++) {
       if (!IntegerVector::is_na(cluster_XX[j]) && !NumericVector::is_na(U_masked[j])) {
         cluster_sums[cluster_XX[j]] += U_masked[j];
       }
     }
 
-    std::set<int> counted;
+    std::unordered_set<int> counted;
     for (int j = 0; j < n; j++) {
       if (first_obs_by_clust[j] == 1 && !IntegerVector::is_na(cluster_XX[j])) {
         const int clust = cluster_XX[j];
-        if (counted.find(clust) == counted.end()) {
+        if (!counted.contains(clust)) {
           const double cs = cluster_sums[clust];
           sum_sq += cs * cs;
-          counted.insert(clust);
+          counted.emplace(clust);
         }
       }
     }
@@ -1333,7 +1332,7 @@ List same_switchers_loop_cpp(NumericVector outcome,
     }
 
     // Compute N_gt_control_last by (time, d_sq)
-    std::map<std::pair<int, int>, double> control_sums;
+    std::unordered_map<std::pair<int, int>, double> control_sums;
     for (int i = 0; i < n; i++) {
       if (!NumericVector::is_na(never_change_last[i]) && !NumericVector::is_na(N_gt[i])) {
         const auto key = std::make_pair(time[i], d_sq[i]);
@@ -1410,7 +1409,7 @@ List bootstrap_prepare_groups_cpp(IntegerVector group) {
   const int n = group.size();
 
   // Find unique groups and their positions
-  std::map<int, std::vector<int>> group_indices;
+  std::unordered_map<int, std::vector<int>> group_indices;
   for (int i = 0; i < n; i++) {
     if (!IntegerVector::is_na(group[i])) {
       group_indices[group[i]].push_back(i);
