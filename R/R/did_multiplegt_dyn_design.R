@@ -41,15 +41,15 @@ did_multiplegt_dyn_design <- function(
   suppressWarnings({
 
 	## Fetch the arguments 
-  des_p <- as.numeric(design_opt[1])
-  des_path <- design_opt[2]
+  des_p <- as.numeric(design_opt[1L])
+  des_path <- design_opt[2L]
   des_n <- l_XX
   des_per <- des_p * 100
 
 	## keep periods up to ℓ periods after the first switch
-  df$F_g_plus_n_XX <- df$F_g_XX + des_n - 1
-  df$sel_XX <- df$time_XX >= df$F_g_XX - 1 & df$time_XX <= df$F_g_plus_n_XX
-  df <- subset(df, df$time_XX >= df$F_g_XX - 1 & df$time_XX <= df$F_g_plus_n_XX)
+  df$F_g_plus_n_XX <- df$F_g_XX + des_n - 1L
+  df$sel_XX <- df$time_XX >= df$F_g_XX - 1L & df$time_XX <= df$F_g_plus_n_XX
+  df <- subset(df, df$time_XX >= df$F_g_XX - 1L & df$time_XX <= df$F_g_plus_n_XX)
   df <- df[order(df$group_XX, df$time_XX), ]
   # Generate row number within group
   df$time_l_XX <- ave(seq_len(nrow(df)), df$group_XX, FUN = seq_along)
@@ -58,10 +58,10 @@ did_multiplegt_dyn_design <- function(
 	## Aggregate weights by group
   if (!is.null(weight)) {
     weight_sum <- aggregate(df$weight_XX, by = list(group_XX = df$group_XX), FUN = sum, na.rm = TRUE)
-    names(weight_sum)[2] <- "g_weight_XX"
+    names(weight_sum)[2L] <- "g_weight_XX"
     df <- merge(df, weight_sum, by = "group_XX", all.x = TRUE)
   } else {
-    df$g_weight_XX <- 1
+    df$g_weight_XX <- 1L
   }
   df$weight_XX <- NULL
 
@@ -119,11 +119,11 @@ did_multiplegt_dyn_design <- function(
   df$id_XX <- ave(seq_len(nrow(df)), df$in_table_XX, FUN = seq_along)
 
 	## Keep all observations up to the first exceeding the p%
-  df <- subset(df, df$in_table_XX == 1 | (df$in_table_XX == 0 & df$id_XX == 1))
+  df <- subset(df, df$in_table_XX == 1L | (df$in_table_XX == 0L & df$id_XX == 1L))
 
 	## Store the final % of groups included by the design option
   if (des_p < 1) {
-    last_p <- 100 * min(df$cum_sum_XX[df$in_table_XX == 0])
+    last_p <- 100 * min(df$cum_sum_XX[df$in_table_XX == 0L])
   } else {
     last_p <- 100
   }
@@ -138,26 +138,26 @@ did_multiplegt_dyn_design <- function(
 	## Prepare matrix for the output table
   coln <- c("N", "Share")
   rown <- c()
-  desmat <- matrix(NA, nrow = dim(df)[1], ncol = 2 + 1 + l_XX)
+  desmat <- matrix(NA, nrow = dim(df)[1], ncol = 2L + 1L + l_XX)
 
 	## Generate the column/row names and fill treatment path
   df <- data.frame(df)
-  for (j in 1:(2 + 1 + l_XX)) {
+  for (j in 1:(2L + 1L + l_XX)) {
     for (i in 1:dim(df)[1]) {
       if (j == 1) {
         rown <- c(rown, paste0("TreatPath", i))
       }
       desmat[i,j] <- as.numeric(df[i,j])
     }
-    if (j > 2) {
-      coln <- c(coln, paste0("\U2113", "=", j - 2 - 1))
+    if (j > 2L) {
+      coln <- c(coln, paste0("\U2113", "=", j - 2L - 1L))
     }
   }
   # Keep df as data.frame (no need to convert to data.table)
   colnames(desmat) <- coln
   rownames(desmat) <- rown 
   
-  desmat[, 2] <- noquote(sprintf("%s", format(round(desmat[,2], 2), big.mark=",", scientific=FALSE, trim=TRUE)))
+  desmat[, 2L] <- noquote(sprintf("%s", format(round(desmat[,2L], 2L), big.mark=",", scientific=FALSE, trim=TRUE)))
   des_const <- c(l_XX, des_per, tot_switch, last_p)
   names(des_const) <- c("effects", "coverage_opt", "switchers", "detected_coverage")
 
@@ -165,7 +165,7 @@ did_multiplegt_dyn_design <- function(
   if (des_path != "console")  {
       by_add <- ""
       if (by_index != "_no_by") {
-        by_add <- paste0(", ",abbreviate(by,5), "=", by_index)
+        by_add <- paste0(", ",abbreviate(by,5L), "=", by_index)
       }
       file[[paste0("Design",by_add)]] <- as.data.frame(desmat)
   }

@@ -75,20 +75,20 @@ did_multiplegt_by_path <- function(
     if (by_path > nrow(design_base$design_mat)) {
         message(sprintf("You requested %.0f treatment paths, but there are only %.0f paths in your data. The program will continue with the latter number of treatment paths."))
     }
-    path <- design_set[,3]
+    path <- design_set[,3L]
     for (j in 1:l_XX) {
-        path <- paste0(path,",",design_set[,3+j])
+        path <- paste0(path,",",design_set[,3L+j])
     }
     
     for (i in 0:l_XX) {
-        path_index[[paste0("D_Fg",i)]] <- ifelse(path_index$time_XX == path_index$F_g_XX - 1 + i, path_index$treatment_XX, NA)
+        path_index[[paste0("D_Fg",i)]] <- ifelse(path_index$time_XX == path_index$F_g_XX - 1L + i, path_index$treatment_XX, NA)
     }
     path_index$treatment_XX <- NULL
     for (j in 0:l_XX) {
         source_col <- paste0("D_Fg", j)
         target_col <- paste0("D_fg", j)
         agg_dfg <- aggregate(path_index[[source_col]], by = list(group = path_index$group), FUN = mean, na.rm = TRUE)
-        names(agg_dfg)[2] <- target_col
+        names(agg_dfg)[2L] <- target_col
         path_index <- merge(path_index, agg_dfg, by = "group", all.x = TRUE)
     }
 
@@ -120,10 +120,10 @@ did_multiplegt_by_path <- function(
 #' @returns bool
 #' @noRd
 count_comma <- function(str) {
-    tot = 0
+    tot <- 0L
     for (k in 1:nchar(str)) {
         if (substr(str,k,k) == ",") {
-            tot = tot + 1
+            tot <- tot + 1L
         }
     }
     return(tot)

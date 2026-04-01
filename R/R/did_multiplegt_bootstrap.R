@@ -71,7 +71,7 @@ did_multiplegt_bootstrap <- function(
     n_effects <- nrow(base$Effects)
     bresults_effects <- matrix(NA, nrow = bootstrap, ncol = n_effects)
     if (isFALSE(trends_lin)) {
-        bresults_ATE <- matrix(NA, nrow = bootstrap, ncol = 1)
+        bresults_ATE <- matrix(NA, nrow = bootstrap, ncol = 1L)
     }
     if (placebo > 0) {
         n_placebo <- nrow(base$Placebos)
@@ -106,22 +106,22 @@ did_multiplegt_bootstrap <- function(
 
         # Vectorized result extraction for effects
         n_res_effects <- nrow(res$Effects)
-        if (n_res_effects > 0) {
+        if (n_res_effects > 0L) {
             n_copy <- min(ncol(bresults_effects), n_res_effects)
-            bresults_effects[j, 1:n_copy] <- res$Effects[1:n_copy, 1]
+            bresults_effects[j, 1:n_copy] <- res$Effects[1:n_copy, 1L]
         }
 
         # ATE extraction
-        if (!is.null(bresults_ATE) && !is.null(res$ATE[1])) {
-            bresults_ATE[j, 1] <- res$ATE[1]
+        if (!is.null(bresults_ATE) && !is.null(res$ATE[1L])) {
+            bresults_ATE[j, 1L] <- res$ATE[1L]
         }
 
         # Vectorized result extraction for placebos
         if (!is.null(bresults_placebo) && !is.null(res$Placebos)) {
             n_res_placebo <- nrow(res$Placebos)
-            if (n_res_placebo > 0) {
+            if (n_res_placebo > 0L) {
                 n_copy <- min(ncol(bresults_placebo), n_res_placebo)
-                bresults_placebo[j, 1:n_copy] <- res$Placebos[1:n_copy, 1]
+                bresults_placebo[j, 1:n_copy] <- res$Placebos[1:n_copy, 1L]
             }
         }
 
@@ -134,24 +134,24 @@ did_multiplegt_bootstrap <- function(
     # Fast C++ SD computation for effects
     effect_sds <- bootstrap_compute_sd_cpp(bresults_effects)
     n_eff <- nrow(base$Effects)
-    base$Effects[1:n_eff, 2] <- effect_sds[1:n_eff]
+    base$Effects[1:n_eff, 2L] <- effect_sds[1:n_eff]
 
     # Fast C++ CI computation for effects
-    ci_effects <- bootstrap_compute_ci_cpp(base$Effects[1:n_eff, 1], effect_sds[1:n_eff], ci_level)
-    base$Effects[1:n_eff, 3] <- ci_effects$lb
-    base$Effects[1:n_eff, 4] <- ci_effects$ub
+    ci_effects <- bootstrap_compute_ci_cpp(base$Effects[1:n_eff, 1L], effect_sds[1:n_eff], ci_level)
+    base$Effects[1:n_eff, 3L] <- ci_effects$lb
+    base$Effects[1:n_eff, 4L] <- ci_effects$ub
 
-    if (nrow(base$Effects) == 1) {
+    if (nrow(base$Effects) == 1L) {
         class(base$Effects) <- "numeric"
     }
 
     # ATE SE computation using C++
-    if (!is.null(bresults_ATE) && !is.null(base$ATE[1])) {
+    if (!is.null(bresults_ATE) && !is.null(base$ATE[1L])) {
         ate_sd <- bootstrap_compute_sd_cpp(bresults_ATE)
-        base$ATE[2] <- ate_sd[1]
-        ci_ate <- bootstrap_compute_ci_cpp(base$ATE[1], ate_sd[1], ci_level)
-        base$ATE[3] <- ci_ate$lb[1]
-        base$ATE[4] <- ci_ate$ub[1]
+        base$ATE[2L] <- ate_sd[1L]
+        ci_ate <- bootstrap_compute_ci_cpp(base$ATE[1L], ate_sd[1L], ci_level)
+        base$ATE[3L] <- ci_ate$lb[1]
+        base$ATE[4L] <- ci_ate$ub[1]
     }
 
     # Fast C++ SD computation for placebos
@@ -161,11 +161,11 @@ did_multiplegt_bootstrap <- function(
         base$Placebos[1:n_pl, 2] <- placebo_sds[1:n_pl]
 
         # Fast C++ CI computation for placebos
-        ci_placebo <- bootstrap_compute_ci_cpp(base$Placebos[1:n_pl, 1], placebo_sds[1:n_pl], ci_level)
-        base$Placebos[1:n_pl, 3] <- ci_placebo$lb
-        base$Placebos[1:n_pl, 4] <- ci_placebo$ub
+        ci_placebo <- bootstrap_compute_ci_cpp(base$Placebos[1:n_pl, 1L], placebo_sds[1:n_pl], ci_level)
+        base$Placebos[1:n_pl, 3L] <- ci_placebo$lb
+        base$Placebos[1:n_pl, 4L] <- ci_placebo$ub
 
-        if (nrow(base$Placebos) == 1) {
+        if (nrow(base$Placebos) == 1L) {
             class(base$Placebos) <- "numeric"
         }
     }

@@ -227,43 +227,43 @@ did_multiplegt_dyn <- function(
           stop(sprintf("Syntax error in %s option. Dataframe object required.", v))
         }
       } else if (v %in% c("outcome", "group", "time", "treatment", "by", "cluster", "weight", "switchers", "save_results")) {
-        if (!(length(get(v)) == 1 & inherits(get(v), "character"))) {
+        if (!(length(get(v)) == 1L && inherits(get(v), "character"))) {
           stop(sprintf("Syntax error in %s option. Only one string allowed.", v))
         }
       } else if (v %in% c("effects", "ci_level", "continuous")) {
-        if (!(inherits(get(v), "numeric") & get(v) %% 1 == 0 & get(v) > 0)) {
+        if (!(inherits(get(v), "numeric") && get(v) %% 1 == 0 && get(v) > 0)) {
           stop(sprintf("Syntax error in %s option. Positive integer required.", v))
         }
       } else if (v == "bootstrap") {
         # Bootstrap can be integer or list(reps, seed)
         if (inherits(get(v), "list")) {
-          if (length(get(v)) != 2) {
+          if (length(get(v)) != 2L) {
             stop("Syntax error in bootstrap option. List must have exactly 2 elements: list(reps, seed).")
           }
-          if (!(inherits(get(v)[[1]], "numeric") & get(v)[[1]] > 1)) {
+          if (!(inherits(get(v)[[1L]], "numeric") && get(v)[[1L]] > 1)) {
             stop("Syntax error in bootstrap option. First element (reps) must be an integer greater than 1.")
           }
         } else if (inherits(get(v), "numeric")) {
-          if (!(get(v) %% 1 == 0 & get(v) > 1)) {
+          if (!(get(v) %% 1 == 0 && get(v) > 1)) {
             stop("Syntax error in bootstrap option. At least 2 bootstrap replications required.")
           }
         } else {
           stop("Syntax error in bootstrap option. Integer or list(reps, seed) required.")
         }
       } else if (v == "placebo") {
-        if (!(inherits(get(v), "numeric") & ((get(v) %% 1 == 0  & get(v) > 0) | get(v) == 0))) {
+        if (!(inherits(get(v), "numeric") && ((get(v) %% 1 == 0 && get(v) > 0) || get(v) == 0))) {
           stop(sprintf("Syntax error in %s option. Non-negative integer required.", v))
         }
       } else if (v == "by_path") {
-        if (!(inherits(get(v), "numeric") & ((get(v) %% 1 == 0  & get(v) > 0) | get(v) == -1))) {
+        if (!(inherits(get(v), "numeric") && ((get(v) %% 1 == 0 && get(v) > 0) || get(v) == -1))) {
           stop(sprintf("Syntax error in %s option. Positive integer or -1 (to select all treatment paths) required.", v))
         }
       } else if (v %in% c("predict_het")) {
-        if (!(inherits(get(v), "list") & length(get(v)) == 2)) {
+        if (!(inherits(get(v), "list") && length(get(v)) == 2L)) {
           stop(sprintf("Syntax error in %s option. List with two arguments required.", v))
         }
       } else if (v %in% c("design", "date_first_switch")) {
-        if (!(length(get(v)) == 2)) {
+        if (!(length(get(v)) == 2L)) {
           stop(sprintf("Syntax error in %s option. Array with two arguments required.", v))
         }
       } else if (v %in% c("controls", "trends_nonparam")) { 
@@ -275,7 +275,7 @@ did_multiplegt_dyn <- function(
           stop(sprintf("Syntax error in %s option. Logical required.", v))
         }
       } else if (v == "effects_equal") {
-        if (!(inherits(get(v), "logical") | inherits(get(v), "character"))) {
+        if (!(inherits(get(v), "logical") || inherits(get(v), "character"))) {
           stop(sprintf("Syntax error in %s option. Logical or string (e.g., 'all' or 'lb, ub') required.", v))
         }
       }
@@ -301,7 +301,7 @@ did_multiplegt_dyn <- function(
   }
 
   #### predict_het_hc2bm requires predict_het
-  if (isTRUE(predict_het_hc2bm) & is.null(predict_het)) {
+  if (isTRUE(predict_het_hc2bm) && is.null(predict_het)) {
     stop("Option predict_het_hc2bm only available when predict_het is specified.")
   }
 
@@ -318,16 +318,16 @@ did_multiplegt_dyn <- function(
       effects_equal <- TRUE
     } else {
       # Parse "lb, ub" format
-      parts <- strsplit(effects_equal, ",")[[1]]
-      if (length(parts) != 2) {
+      parts <- strsplit(effects_equal, ",")[[1L]]
+      if (length(parts) != 2L) {
         stop("Syntax error in effects_equal option. Use TRUE, 'all', or 'lb, ub' format (e.g., '2, 5').")
       }
-      effects_equal_lb <- as.integer(trimws(parts[1]))
-      effects_equal_ub <- as.integer(trimws(parts[2]))
-      if (is.na(effects_equal_lb) | is.na(effects_equal_ub)) {
+      effects_equal_lb <- as.integer(trimws(parts[1L]))
+      effects_equal_ub <- as.integer(trimws(parts[2L]))
+      if (is.na(effects_equal_lb) || is.na(effects_equal_ub)) {
         stop("Syntax error in effects_equal option. Bounds must be integers.")
       }
-      if (effects_equal_ub <= effects_equal_lb | effects_equal_lb < 1) {
+      if (effects_equal_ub <= effects_equal_lb || effects_equal_lb < 1L) {
         stop("Syntax error in effects_equal option: The bounds specified are out of range.")
       }
       effects_equal <- TRUE
@@ -337,27 +337,27 @@ did_multiplegt_dyn <- function(
   #### Process bootstrap if it's a list
   bootstrap_seed <- NULL
   if (!is.null(bootstrap) && inherits(bootstrap, "list")) {
-    bootstrap_seed <- bootstrap[[2]]
-    bootstrap <- as.integer(bootstrap[[1]])
+    bootstrap_seed <- bootstrap[[2L]]
+    bootstrap <- as.integer(bootstrap[[1L]])
   }
 
   #### The continous and the design option(s) should not be specified simulataneously
-  if (!is.null(design) & !is.null(continuous)) {
+  if (!is.null(design) && !is.null(continuous)) {
     stop("The design option can not be specified together with the continuous option!")
   }
   ### Normalized weights requires normalized ###
-  if (isTRUE(normalized_weights) & isFALSE(normalized)) {
+  if (isTRUE(normalized_weights) && isFALSE(normalized)) {
     stop("normalized option required to compute normalized_weights")
   }
   ### By or by_path ###
-  if (!is.null(by) & !is.null(by_path)) {
+  if (!is.null(by) && !is.null(by_path)) {
     stop("You cannot specify by and by_path options together.")
   }
   ### Warning for bootstrap without continuous option
-  if (!is.null(bootstrap) & is.null(continuous)) {
+  if (!is.null(bootstrap) && is.null(continuous)) {
     message("did_multiplegt_dyn computes by default analytical standard errors - in most cases, there is no need to use the bootstrap option.\nBootstrapping is a much slower alternative and we recommend it only in combination with the continuous option.")
   }
-  if (is.null(bootstrap) & !is.null(continuous)) {
+  if (is.null(bootstrap) && !is.null(continuous)) {
     message("You specified the continuous option without the bootstrap option. \nPlease be aware that we recommend to compute bootstraped standard errors when you are using the continuous option as the analytical standard errors can be liberal in that case.")
   }
 
@@ -400,7 +400,7 @@ did_multiplegt_dyn <- function(
         message(sprintf("Running did_multiplegt_dyn for %s = %s", by, by_levels[b]))
         } else if (!is.null(by_path)) {
           df_main <- subset(df, df$path_XX == by_levels[b] | 
-              (df$yet_to_switch == 1 & df$baseline_XX == substr(by_levels[b],1,1)))
+              (df$yet_to_switch == 1 & df$baseline_XX == substr(by_levels[b], 1L, 1L)))
           df_main$path_XX <- df_main$yet_to_switch_XX <- df_main$baseline_XX <- NULL
           message(sprintf("Running did_multiplegt_dyn for treatment path (%s)", by_levels[b]))
         }
@@ -483,7 +483,7 @@ did_multiplegt_dyn <- function(
 
   names(did_multiplegt_dyn) <- f_names
 
-  if (!is.null(by) | !is.null(by_path)) {
+  if (!is.null(by) || !is.null(by_path)) {
     if (isTRUE(save_sample)) {
       did_multiplegt_dyn <- adj_save_sample(did_multiplegt_dyn)
       names(did_multiplegt_dyn)[length(did_multiplegt_dyn)] <- "save_sample"

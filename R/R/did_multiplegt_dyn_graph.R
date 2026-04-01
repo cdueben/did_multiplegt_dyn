@@ -11,9 +11,9 @@ did_multiplegt_dyn_graph <- function(data, args = list()) {
     grmat <- rbind(grmat, cbind(data$Placebos, (-1) * 1:nrow(data$Placebos)))
   }
   colnames(grmat)[ncol(grmat)] <- "Time"
-  grmat[nrow(data$Effects) + 1, c(1,3,4)] <- 0
-  grmat <- data.frame(grmat[, c(1,3,4,9)])
-  did_multiplegt_dyn_plot <- ggplot(grmat,aes(x = .data$Time, y = .data$Estimate, group = 1)) + 
+  grmat[nrow(data$Effects) + 1L, c(1L, 3L, 4L)] <- 0
+  grmat <- data.frame(grmat[, c(1L, 3L, 4L, 9L)])
+  did_multiplegt_dyn_plot <- ggplot(grmat,aes(x = .data$Time, y = .data$Estimate, group = 1L)) + 
     geom_line(colour = "blue") + 
     geom_errorbar(data = ~dplyr::filter(.x, grmat$Estimate != 0),aes(ymin = .data$LB.CI, ymax = .data$UB.CI), position=position_dodge(0.05), width = 0.2, colour = "red")  + 
     geom_point(colour = "blue") + 
@@ -40,9 +40,9 @@ combine_plot <- function(obj) {
     color_set <- get_colors(length(obj$by_levels))
     base_plot <- obj$by_level_1$plot
     plot <-  ggplot(data = base_plot$data, aes(x = base_plot$data$Time, y = base_plot$data$Estimate))  +
-              geom_point(colour = color_set[1]) + geom_line(aes(colour = paste0(obj$args$by," = ", obj$by_levels[1]))) +
-              geom_errorbar(data = base_plot$data, aes(ymin = base_plot$data$LB.CI, ymax = base_plot$data$UB.CI), position=position_dodge(0.05), width = 0.2, colour = color_set[1])
-    if (length(obj$by_levels) > 1) {
+              geom_point(colour = color_set[1L]) + geom_line(aes(colour = paste0(obj$args$by," = ", obj$by_levels[1]))) +
+              geom_errorbar(data = base_plot$data, aes(ymin = base_plot$data$LB.CI, ymax = base_plot$data$UB.CI), position=position_dodge(0.05), width = 0.2, colour = color_set[1L])
+    if (length(obj$by_levels) > 1L) {
       for (j in 2:length(obj$by_levels)) {
         add_plot <-  obj[[paste0("by_level_",j)]][["plot"]]
         plot <- plot + 
@@ -57,13 +57,13 @@ combine_plot <- function(obj) {
       theme(plot.title = element_text(hjust = 0.5), legend.position = "bottom") +
       scale_colour_manual("", breaks = paste0(obj$args$by, " = ", obj$by_levels), values = color_set)
   } else if (!is.null(obj$args[["by_path"]])) {
-    if (length(obj$by_levels) > 100) {
+    if (length(obj$by_levels) > 100L) {
       message("The command allows a maximum of 100 graphs to be combined in a 10 x 10 window. The resulting graph will be restricted to the first 100 treatment paths.")
     }
     sides <- ceiling(sqrt(length(obj$by_levels))); len <- 1/sides;
     plot <- ggdraw()
     for (j in 1:length(obj$by_levels)) {
-      plot <- plot + draw_plot(obj[[paste0("by_level_",j)]]$plot + ggtitle(sprintf("Treatment path (%s); %.0f switchers", obj$by_levels[j], obj[[paste0("by_level_",j)]]$results$Effects[1,6])) + xlab(" "), width = len, height = len, y = (sides - ceiling(j/sides)) * len, x = ((j-1) %% sides) * len)
+      plot <- plot + draw_plot(obj[[paste0("by_level_",j)]]$plot + ggtitle(sprintf("Treatment path (%s); %.0f switchers", obj$by_levels[j], obj[[paste0("by_level_",j)]]$results$Effects[1L, 6L])) + xlab(" "), width = len, height = len, y = (sides - ceiling(j/sides)) * len, x = ((j - 1L) %% sides) * len)
     }
     plot <- plot + ggtitle("DID from last period before treatment changes (t = 0) to t") + theme(plot.title = element_text(hjust = 0.5))
   }
@@ -77,7 +77,7 @@ combine_plot <- function(obj) {
 #' @returns A list of colors.
 #' @noRd
 get_colors <- function(N) {
-  must_color <- c(552, 26, 81, 68, 450, 640, 24, 498) 
+  must_color <- c(552L, 26L, 81L, 68L, 450L, 640L, 24L, 498L) 
   # Indices of the following colors in ggplot's colors()
   # Red, blue, green, cyan, magenta, violet, black, orange
   other_color <- 1:657
