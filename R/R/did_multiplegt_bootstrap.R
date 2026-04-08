@@ -95,9 +95,8 @@ did_multiplegt_bootstrap <- function(
         sampled_idx <- sampled_idx + 1L
         df_boot <- df[sampled_idx, ]
 
-        # Sort the data frame
-        df_boot <- as.data.frame(df_boot)
-        df_boot <- df_boot[order(df_boot[[group_col]], df_boot[[time_col]]), ]
+        # Sort the bootstrap sample
+        data.table::setorderv(df_boot, c(group_col, time_col))
 
         suppressMessages({
         df_est <- did_multiplegt_main(df = df_boot, outcome = outcome, group = group, time = time, treatment = treatment, effects = effects, placebo = placebo, ci_level = ci_level, switchers = switchers, trends_nonparam = trends_nonparam, weight = weight, controls = controls, dont_drop_larger_lower = dont_drop_larger_lower, drop_if_d_miss_before_first_switch = drop_if_d_miss_before_first_switch, cluster = cluster, same_switchers = same_switchers, same_switchers_pl = same_switchers_pl, only_never_switchers = only_never_switchers, effects_equal = effects_equal, save_results = save_results, normalized = normalized, predict_het = predict_het, trends_lin = trends_lin, less_conservative_se = less_conservative_se, continuous = continuous)})
@@ -131,51 +130,39 @@ did_multiplegt_bootstrap <- function(
 
     ci_level <- ci_level / 100
 
-    # Fast C++ SD computation for effects
-    effect_sds <- bootstrap_compute_sd_cpp(bresults_effects)
+    # SD and CI computation for effects
+    effect_sds <- apply(bresults_effects, 2L, stats::sd, na.rm = TRUE)
     n_eff <- nrow(base$Effects)
     base$Effects[1:n_eff, 2L] <- effect_sds[1:n_eff]
 
-    # Fast C++ CI computation for effects
-    ci_effects <- bootstrap_compute_ci_cpp(base$Effects[1:n_eff, 1L], effect_sds[1:n_eff], ci_level)
-    base$Effects[1:n_eff, 3L] <- ci_effects$lb
-    base$Effects[1:n_eff, 4L] <- ci_effects$ub
+    z <- stats::qnorm(1 - (1 - ci_level) / 2)
+    base$Effects[1:n_eff, 3L] <- base$Effects[1:n_eff, 1L] - z * effect_sds[1:n_eff]
+    base$Effects[1:n_eff, 4L] <- base$Effects[1:n_eff, 1L] + z * effect_sds[1:n_eff]
 
     if (nrow(base$Effects) == 1L) {
         class(base$Effects) <- "numeric"
     }
 
-    # ATE SE computation using C++
+    # ATE SE computation
     if (!is.null(bresults_ATE) && !is.null(base$ATE[1L])) {
-        ate_sd <- bootstrap_compute_sd_cpp(bresults_ATE)
-        base$ATE[2L] <- ate_sd[1L]
-        ci_ate <- bootstrap_compute_ci_cpp(base$ATE[1L], ate_sd[1L], ci_level)
-        base$ATE[3L] <- ci_ate$lb[1]
-        base$ATE[4L] <- ci_ate$ub[1]
+        ate_sd <- stats::sd(bresults_ATE[, 1L], na.rm = TRUE)
+        base$ATE[2L] <- ate_sd
+        base$ATE[3L] <- base$ATE[1L] - z * ate_sd
+        base$ATE[4L] <- base$ATE[1L] + z * ate_sd
     }
 
-    # Fast C++ SD computation for placebos
+    # SD and CI computation for placebos
     if (!is.null(bresults_placebo)) {
-        placebo_sds <- bootstrap_compute_sd_cpp(bresults_placebo)
+        placebo_sds <- apply(bresults_placebo, 2L, stats::sd, na.rm = TRUE)
         n_pl <- nrow(base$Placebos)
         base$Placebos[1:n_pl, 2] <- placebo_sds[1:n_pl]
 
-        # Fast C++ CI computation for placebos
-        ci_placebo <- bootstrap_compute_ci_cpp(base$Placebos[1:n_pl, 1L], placebo_sds[1:n_pl], ci_level)
-        base$Placebos[1:n_pl, 3L] <- ci_placebo$lb
-        base$Placebos[1:n_pl, 4L] <- ci_placebo$ub
+        base$Placebos[1:n_pl, 3L] <- base$Placebos[1:n_pl, 1L] - z * placebo_sds[1:n_pl]
+        base$Placebos[1:n_pl, 4L] <- base$Placebos[1:n_pl, 1L] + z * placebo_sds[1:n_pl]
 
         if (nrow(base$Placebos) == 1L) {
             class(base$Placebos) <- "numeric"
         }
     }
     return(base)
-}
-
-#' Internal function to convert lists to vectors (optimized)
-#' @param lis A list
-#' @returns A vector
-#' @noRd
-list_to_vec <- function(lis) {
-    unlist(lis, use.names = FALSE)
 }

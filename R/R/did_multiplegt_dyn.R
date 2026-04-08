@@ -1,6 +1,4 @@
 #' Core function for did_multiplegt_dyn
-#' @importFrom haven read_dta
-#' @importFrom openxlsx write.xlsx
 #' @md 
 #' @description  Estimation of heterogeneity-robust difference-in-differences (DID) estimators, with a binary, discrete, or continuous treatment, in designs where past treatments may affect the current outcome.
 #' @param df (dataframe) the estimation dataset.
@@ -189,27 +187,6 @@ did_multiplegt_dyn <- function(
     ggplot_args = NULL
     ) {
 
-  #### Check if polars is loaded ####
-  if (!requireNamespace("polars", quietly = TRUE)) {
-    stop(
-      "The 'polars' package is required but not installed.\n",
-      "Please install it from r-universe with:\n",
-      "  install.packages('polars', repos = 'https://rpolars.r-universe.dev')\n",
-      "Then load it with: library(polars)",
-      call. = FALSE
-    )
-  }
-
-  if (!"polars" %in% .packages()) {
-    warning(
-      "The 'polars' package is installed but not loaded.\n",
-      "For optimal performance, please run: library(polars)\n",
-      "before using did_multiplegt_dyn().",
-      call. = FALSE,
-      immediate. = TRUE
-    )
-  }
-
   #### General syntax checks ####
   if (!is.null(cluster)) {
     if (cluster == group) {
@@ -226,11 +203,11 @@ did_multiplegt_dyn <- function(
         if (!inherits(get(v), "data.frame")) {
           stop(sprintf("Syntax error in %s option. Dataframe object required.", v))
         }
-      } else if (v %in% c("outcome", "group", "time", "treatment", "by", "cluster", "weight", "switchers", "save_results")) {
+      } else if (v %chin% c("outcome", "group", "time", "treatment", "by", "cluster", "weight", "switchers", "save_results")) {
         if (!(length(get(v)) == 1L && inherits(get(v), "character"))) {
           stop(sprintf("Syntax error in %s option. Only one string allowed.", v))
         }
-      } else if (v %in% c("effects", "ci_level", "continuous")) {
+      } else if (v %chin% c("effects", "ci_level", "continuous")) {
         if (!(inherits(get(v), "numeric") && get(v) %% 1 == 0 && get(v) > 0)) {
           stop(sprintf("Syntax error in %s option. Positive integer required.", v))
         }
@@ -258,19 +235,19 @@ did_multiplegt_dyn <- function(
         if (!(inherits(get(v), "numeric") && ((get(v) %% 1 == 0 && get(v) > 0) || get(v) == -1))) {
           stop(sprintf("Syntax error in %s option. Positive integer or -1 (to select all treatment paths) required.", v))
         }
-      } else if (v %in% c("predict_het")) {
+      } else if (v %chin% c("predict_het")) {
         if (!(inherits(get(v), "list") && length(get(v)) == 2L)) {
           stop(sprintf("Syntax error in %s option. List with two arguments required.", v))
         }
-      } else if (v %in% c("design", "date_first_switch")) {
+      } else if (v %chin% c("design", "date_first_switch")) {
         if (!(length(get(v)) == 2L)) {
           stop(sprintf("Syntax error in %s option. Array with two arguments required.", v))
         }
-      } else if (v %in% c("controls", "trends_nonparam")) { 
+      } else if (v %chin% c("controls", "trends_nonparam")) { 
         if (!(inherits(get(v), "character"))) {
           stop(sprintf("Syntax error in %s option. String or string array required.", v))
         }
-      } else if (v %in% c("normalized", "normalized_weights", "trends_lin", "same_switchers", "same_switchers_pl", "graph_off", "save_sample", "less_conservative_se", "more_granular_demeaning", "dont_drop_larger_lower", "drop_if_d_miss_before_first_switch", "predict_het_hc2bm", "only_never_switchers")) {
+      } else if (v %chin% c("normalized", "normalized_weights", "trends_lin", "same_switchers", "same_switchers_pl", "graph_off", "save_sample", "less_conservative_se", "more_granular_demeaning", "dont_drop_larger_lower", "drop_if_d_miss_before_first_switch", "predict_het_hc2bm", "only_never_switchers")) {
         if (!inherits(get(v), "logical")) {
           stop(sprintf("Syntax error in %s option. Logical required.", v))
         }
@@ -392,16 +369,16 @@ did_multiplegt_dyn <- function(
   xlsx_design <- list()
   xlsx_dfs <- list()
 
-  for (b in 1:length(by_levels)) {
+  for (b in seq_along(by_levels)) {
 
     if (by_levels[b] != "_no_by") {
         if (!is.null(by)) {
-        df_main <- subset(df, df[[by]] == by_levels[b])
+        df_main <- df[get(by) == by_levels[b]]
         message(sprintf("Running did_multiplegt_dyn for %s = %s", by, by_levels[b]))
         } else if (!is.null(by_path)) {
-          df_main <- subset(df, df$path_XX == by_levels[b] | 
-              (df$yet_to_switch == 1 & df$baseline_XX == substr(by_levels[b], 1L, 1L)))
-          df_main$path_XX <- df_main$yet_to_switch_XX <- df_main$baseline_XX <- NULL
+          df_main <- df[path_XX == by_levels[b] | 
+              (yet_to_switch_XX == 1 & baseline_XX == substr(by_levels[b], 1L, 1L))]
+          df_main[, c("path_XX", "yet_to_switch_XX", "baseline_XX") := NULL]
           message(sprintf("Running did_multiplegt_dyn for treatment path (%s)", by_levels[b]))
         }
     } else {
@@ -457,7 +434,7 @@ did_multiplegt_dyn <- function(
     if (isTRUE(save_sample)) {
       df_save_XX <- did_save_sample(df_est, group, time)
       df_m <- merge(df, df_save_XX, by = c(group, time)) 
-      df_m <- df_m[order(df_m[[group]], df_m[[time]]), ]
+      data.table::setorderv(df_m, c(group, time))
       # rownames(df_m) <- 1:nrow(df_m)
       temp_obj <- append(temp_obj, list(df_m))
       names(temp_obj)[length(temp_obj)] <- "save_sample"
@@ -474,10 +451,16 @@ did_multiplegt_dyn <- function(
     }
   }
 
-  if (length(names(xlsx_design)) > 0) {
+  if (length(names(xlsx_design)) > 0L) {
+    if (!requireNamespace("openxlsx", quietly = TRUE)) {
+      stop("Package 'openxlsx' is required to export Excel files. Install it with install.packages('openxlsx').")
+    }
     openxlsx::write.xlsx(xlsx_design, file =  design[2], gridExpand = TRUE)
   }
-  if (length(names(xlsx_dfs)) > 0) {
+  if (length(names(xlsx_dfs)) > 0L) {
+    if (!requireNamespace("openxlsx", quietly = TRUE)) {
+      stop("Package 'openxlsx' is required to export Excel files. Install it with install.packages('openxlsx').")
+    }
     openxlsx::write.xlsx(xlsx_dfs, file =  date_first_switch[2], gridExpand = TRUE)
   }
 
