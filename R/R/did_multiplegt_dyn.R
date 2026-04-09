@@ -37,6 +37,7 @@
 #' @param dont_drop_larger_lower (logical) by default, the command drops all the \eqn{(g,t)} cells such that at \eqn{t}, group \eqn{g} has experienced both a strictly larger and a strictly lower treatment than its baseline treatment. de Chaisemartin and D'Haultfoeuille (2020a) recommend this procedure, if you are interested in more details you can see their Section 3.1. The option \code{dont_drop_larger_lower} allows to overwrite this procedure and keeps \eqn{(g,t)} cells such that at \eqn{t}, group \eqn{g} has experienced both a strictly larger and a strictly lower treatment than its baseline treatment in the estimation sample.
 #' @param drop_if_d_miss_before_first_switch (logical) This option is relevant when the treatment of some groups is missing at some time periods. Then, the command imputes some of those missing treatments. Those imputations are detailed in Appendix A of de Chaisemartin et al (2024). In designs where groups' treatments can change at most once, all those imputations are justified by the design. In other designs, some of those imputations may be liberal. \code{drop_if_d_miss_before_first_switch} can be used to overrule the potentially liberal imputations that are not innocuous for the non-normalized event-study estimators. See Appendix A of de Chaisemartin et al (2024) for further details.
 #' @param ggplot_args (list) This option allows you to enter additional ggplot features to the event-study graph produced by the command. Enter all your arguments in the list, as you would list them with a + in general. For instance, you can modify legends by using \code{ggplot_args = list(labs(…))}. More pervasive changes can be done by directly interacting with the ggplot object stored in the \code{$plot} sub-list of the assigned \code{did_multiplegt_dyn} object.
+#' @param parallel (logical or integer) when this option is specified, the command performs parallel computation using the \code{mirai} package. When set to \code{TRUE}, the number of workers is automatically determined based on available CPU cores. When set to a positive integer, that many workers are used. Parallelization speeds up the \code{by}, \code{by_path}, and \code{bootstrap} options. Requires the \code{mirai} package to be installed.
 #' @section Overview:
 #' \code{did_multiplegt_dyn()} estimates the effect of a treatment on an outcome, using group-(e.g. county- or state-) level panel data. The command computes the DID event-study estimators introduced in de Chaisemartin and D'Haultfoeuille (2024). Like other recently proposed DID estimation commands (\code{did}, \code{didimputation}, ...), \code{did_multiplegt_dyn()} can be used with a binary and staggered (absorbing) treatment. But unlike those other commands, \code{did_multiplegt_dyn()} can also be used with a non-binary treatment (discrete or continuous) that can increase or decrease multiple times. Lagged treatments may affect the outcome, and the current and lagged treatments may have heterogeneous effects, across space and/or over time.  The event-study estimators computed by the command rely on a no-anticipation and parallel trends assumptions. The panel may be unbalanced:  not all groups have to be observed at every period.  The data may also be at a more disaggregated level than the group level (e.g. individual-level wage data to measure the effect of a regional-level minimum-wage on individuals' wages).
 #' @section Further detail:
@@ -184,7 +185,8 @@ did_multiplegt_dyn <- function(
     bootstrap = NULL,
     dont_drop_larger_lower = FALSE, 
     drop_if_d_miss_before_first_switch = FALSE,
-    ggplot_args = NULL
+    ggplot_args = NULL,
+    parallel = FALSE
     ) {
 
   #### General syntax checks ####
@@ -254,6 +256,10 @@ did_multiplegt_dyn <- function(
       } else if (v == "effects_equal") {
         if (!(inherits(get(v), "logical") || inherits(get(v), "character"))) {
           stop(sprintf("Syntax error in %s option. Logical or string (e.g., 'all' or 'lb, ub') required.", v))
+        }
+      } else if (v == "parallel") {
+        if (!(inherits(get(v), "logical") || (inherits(get(v), "numeric") && get(v) %% 1 == 0 && get(v) > 0))) {
+          stop("Syntax error in parallel option. TRUE, FALSE, or a positive integer required.")
         }
       }
     }
@@ -366,88 +372,255 @@ did_multiplegt_dyn <- function(
   ## - if the option is not specified, the output is an object with just one "results" branch.
   ## - if the option is specified, the output takes on as many branches as the levels of the by variable
 
+  #### Set up mirai daemons if parallel option is specified ####
+  if (!isFALSE(parallel)) {
+    if (!requireNamespace("mirai", quietly = TRUE)) {
+      stop("Package 'mirai' is required for the parallel option. Install it with install.packages('mirai').")
+    }
+    n_workers <- if (isTRUE(parallel)) {
+      max(2L, parallel::detectCores() - 1L)
+    } else {
+      as.integer(parallel)
+    }
+    mirai::daemons(n_workers, .compute = .mirai_compute)
+    on.exit(mirai::daemons(0, .compute = .mirai_compute), add = TRUE)
+  }
+
   xlsx_design <- list()
   xlsx_dfs <- list()
 
-  for (b in seq_along(by_levels)) {
+  n_mirai <- .mirai_n_daemons()
+  parallel_by <- n_mirai > 0L && length(by_levels) > 1L
 
-    if (by_levels[b] != "_no_by") {
-        if (!is.null(by)) {
-        df_main <- df[get(by) == by_levels[b]]
-        message(sprintf("Running did_multiplegt_dyn for %s = %s", by, by_levels[b]))
-        } else if (!is.null(by_path)) {
-          df_main <- df[path_XX == by_levels[b] | 
-              (yet_to_switch_XX == 1 & baseline_XX == substr(by_levels[b], 1L, 1L))]
-          df_main[, c("path_XX", "yet_to_switch_XX", "baseline_XX") := NULL]
-          message(sprintf("Running did_multiplegt_dyn for treatment path (%s)", by_levels[b]))
-        }
-    } else {
-      df_main <- df
-    }
+  if (parallel_by) {
+    # ---- Parallel by-loop via mirai ----
+    message(sprintf("Parallelizing estimation across %d subgroups using %d mirai daemons...",
+                    length(by_levels), min(n_mirai, length(by_levels))))
 
-    df_est <- did_multiplegt_main(df = df_main, outcome = outcome, group =  group, time =  time, treatment = treatment, effects = effects, placebo = placebo, ci_level = ci_level,switchers = switchers, trends_nonparam = trends_nonparam, weight = weight, controls = controls, dont_drop_larger_lower = dont_drop_larger_lower, drop_if_d_miss_before_first_switch = drop_if_d_miss_before_first_switch, cluster = cluster, same_switchers = same_switchers, same_switchers_pl = same_switchers_pl, only_never_switchers = only_never_switchers, effects_equal = effects_equal, effects_equal_lb = effects_equal_lb, effects_equal_ub = effects_equal_ub, save_results = save_results, normalized = normalized, predict_het = predict_het, predict_het_hc2bm = predict_het_hc2bm, trends_lin = trends_lin, less_conservative_se = less_conservative_se, continuous = continuous)
-
-    temp_obj <- list(df_est$did_multiplegt_dyn)
-    names(temp_obj)[length(temp_obj)] <- "results"
-    temp_obj <- append(temp_obj, list(df_est$coef))
-    names(temp_obj)[length(temp_obj)] <- "coef"
-
-    # Add controls_globals (includes didmgt_XX, didmgt_Xy matrices for precision comparison)
-    if (!is.null(df_est$controls_globals)) {
-      temp_obj <- append(temp_obj, list(df_est$controls_globals))
-      names(temp_obj)[length(temp_obj)] <- "controls_globals"
-    }
-
-    if (!is.null(bootstrap)) {
-      if (!is.null(bootstrap_seed)) {
-        message(sprintf("\nBootstrap, %.0f reps (seed = %.0f):", bootstrap, bootstrap_seed))
-      } else {
-        message(sprintf("\nBootstrap, %.0f reps:", bootstrap))
+    # Pre-filter data for each by-level
+    df_mains <- vector("list", length(by_levels))
+    for (b in seq_along(by_levels)) {
+      if (!is.null(by)) {
+        df_mains[[b]] <- df[get(by) == by_levels[b]]
+      } else if (!is.null(by_path)) {
+        df_mains[[b]] <- df[path_XX == by_levels[b] | 
+            (yet_to_switch_XX == 1 & baseline_XX == substr(by_levels[b], 1L, 1L))]
+        df_mains[[b]][, c("path_XX", "yet_to_switch_XX", "baseline_XX") := NULL]
       }
-      temp_obj$results <- did_multiplegt_bootstrap(df = df_main, outcome = outcome, group =  group, time =  time, treatment = treatment, effects = effects, placebo = placebo, ci_level = ci_level,switchers = switchers, trends_nonparam = trends_nonparam, weight = weight, controls = controls, dont_drop_larger_lower = dont_drop_larger_lower, drop_if_d_miss_before_first_switch = drop_if_d_miss_before_first_switch, cluster = cluster, same_switchers = same_switchers, same_switchers_pl = same_switchers_pl, only_never_switchers = only_never_switchers, effects_equal = FALSE, save_results = NULL, normalized = normalized, predict_het = predict_het, trends_lin = trends_lin, less_conservative_se = less_conservative_se, continuous = continuous, bootstrap = bootstrap, bootstrap_seed = bootstrap_seed, base = temp_obj$results)
     }
 
-    if (!is.null(design)) {
-      temp_out <- did_multiplegt_dyn_design(df_est, design, weight, by, by_levels[b], xlsx_design)
-      xlsx_design <- temp_out$design_file; temp_out$design_file <- NULL;
-      temp_obj <- append(temp_obj, list(temp_out))
-      names(temp_obj)[length(temp_obj)] <- "design"
+    # Collect arguments for did_multiplegt_main
+    main_args <- list(
+      outcome = outcome, group = group, time = time, treatment = treatment,
+      effects = effects, placebo = placebo, ci_level = ci_level,
+      switchers = switchers, trends_nonparam = trends_nonparam,
+      weight = weight, controls = controls,
+      dont_drop_larger_lower = dont_drop_larger_lower,
+      drop_if_d_miss_before_first_switch = drop_if_d_miss_before_first_switch,
+      cluster = cluster, same_switchers = same_switchers,
+      same_switchers_pl = same_switchers_pl,
+      only_never_switchers = only_never_switchers,
+      effects_equal = effects_equal, effects_equal_lb = effects_equal_lb,
+      effects_equal_ub = effects_equal_ub,
+      save_results = save_results, normalized = normalized,
+      predict_het = predict_het, predict_het_hc2bm = predict_het_hc2bm,
+      trends_lin = trends_lin, less_conservative_se = less_conservative_se,
+      continuous = continuous
+    )
+
+    do_boot <- !is.null(bootstrap)
+    boot_args <- if (do_boot) {
+      list(
+        outcome = outcome, group = group, time = time, treatment = treatment,
+        effects = effects, placebo = placebo, ci_level = ci_level,
+        switchers = switchers, trends_nonparam = trends_nonparam,
+        weight = weight, controls = controls,
+        dont_drop_larger_lower = dont_drop_larger_lower,
+        drop_if_d_miss_before_first_switch = drop_if_d_miss_before_first_switch,
+        cluster = cluster, same_switchers = same_switchers,
+        same_switchers_pl = same_switchers_pl,
+        only_never_switchers = only_never_switchers,
+        effects_equal = FALSE, save_results = NULL,
+        normalized = normalized, predict_het = predict_het,
+        trends_lin = trends_lin, less_conservative_se = less_conservative_se,
+        continuous = continuous
+      )
     }
 
-    if (!is.null(date_first_switch)) {
-      temp_out <- did_multiplegt_dyn_dfs(df_est, date_first_switch, by, by_levels[b], xlsx_dfs)
-      xlsx_dfs <- temp_out$dfs_file; temp_out$dfs_file <- NULL
-      temp_obj <- append(temp_obj, list(temp_out))
-      names(temp_obj)[length(temp_obj)] <- "date_first_switch"
-      append_dfs <- TRUE
+    # Dispatch tasks to mirai daemons
+    tasks <- vector("list", length(by_levels))
+    for (b in seq_along(by_levels)) {
+      tasks[[b]] <- mirai::mirai(
+        {
+          df_est <- do.call(
+            DIDmultiplegtDYN:::did_multiplegt_main,
+            c(list(df = df_main), main_args)
+          )
+          results <- df_est$did_multiplegt_dyn
+          if (do_boot) {
+            suppressMessages({
+              results <- do.call(
+                DIDmultiplegtDYN:::did_multiplegt_bootstrap,
+                c(list(df = df_main, bootstrap = boot_reps,
+                       bootstrap_seed = boot_seed, base = results),
+                  boot_args)
+              )
+            })
+          }
+          list(df_est = df_est, results = results)
+        },
+        df_main = df_mains[[b]],
+        main_args = main_args,
+        do_boot = do_boot,
+        boot_reps = bootstrap,
+        boot_seed = bootstrap_seed,
+        boot_args = boot_args,
+        .compute = .mirai_compute
+      )
     }
 
-    if (isTRUE(normalized_weights)) {
-      temp_obj <- append(temp_obj, 
-          list(did_multiplegt_dyn_normweights(df_est, normalized, normalized_weights, same_switchers, continuous)))
-      names(temp_obj)[length(temp_obj)] <- "normalized_weights"
-    }
+    # Collect results and post-process sequentially
+    for (b in seq_along(by_levels)) {
+      worker_res <- tasks[[b]]$data
+      if (!is.list(worker_res) || is.null(worker_res$df_est)) {
+        msg <- tryCatch(conditionMessage(worker_res),
+          error = function(e) as.character(worker_res))
+        stop(sprintf("Estimation failed for subgroup '%s': %s",
+                     by_levels[b], paste(msg, collapse = " ")))
+      }
 
-    temp_obj <- append(temp_obj, list(did_multiplegt_dyn_graph(temp_obj$results, ggplot_args)))
-    names(temp_obj)[length(temp_obj)] <- "plot"
-    
-    if (isTRUE(save_sample)) {
-      df_save_XX <- did_save_sample(df_est, group, time)
-      df_m <- merge(df, df_save_XX, by = c(group, time)) 
-      data.table::setorderv(df_m, c(group, time))
-      # rownames(df_m) <- 1:nrow(df_m)
-      temp_obj <- append(temp_obj, list(df_m))
-      names(temp_obj)[length(temp_obj)] <- "save_sample"
-    }
+      df_est <- worker_res$df_est
 
-    if (by_levels[b] == "_no_by") {
-      did_multiplegt_dyn <- c(did_multiplegt_dyn, temp_obj)
-      f_names <- c(f_names, names(temp_obj))
-    } else {
+      temp_obj <- list(worker_res$results)
+      names(temp_obj)[length(temp_obj)] <- "results"
+      temp_obj <- append(temp_obj, list(df_est$coef))
+      names(temp_obj)[length(temp_obj)] <- "coef"
+
+      if (!is.null(df_est$controls_globals)) {
+        temp_obj <- append(temp_obj, list(df_est$controls_globals))
+        names(temp_obj)[length(temp_obj)] <- "controls_globals"
+      }
+
+      if (!is.null(design)) {
+        temp_out <- did_multiplegt_dyn_design(df_est, design, weight, by, by_levels[b], xlsx_design)
+        xlsx_design <- temp_out$design_file; temp_out$design_file <- NULL;
+        temp_obj <- append(temp_obj, list(temp_out))
+        names(temp_obj)[length(temp_obj)] <- "design"
+      }
+
+      if (!is.null(date_first_switch)) {
+        temp_out <- did_multiplegt_dyn_dfs(df_est, date_first_switch, by, by_levels[b], xlsx_dfs)
+        xlsx_dfs <- temp_out$dfs_file; temp_out$dfs_file <- NULL
+        temp_obj <- append(temp_obj, list(temp_out))
+        names(temp_obj)[length(temp_obj)] <- "date_first_switch"
+        append_dfs <- TRUE
+      }
+
+      if (isTRUE(normalized_weights)) {
+        temp_obj <- append(temp_obj, 
+            list(did_multiplegt_dyn_normweights(df_est, normalized, normalized_weights, same_switchers, continuous)))
+        names(temp_obj)[length(temp_obj)] <- "normalized_weights"
+      }
+
+      temp_obj <- append(temp_obj, list(did_multiplegt_dyn_graph(temp_obj$results, ggplot_args)))
+      names(temp_obj)[length(temp_obj)] <- "plot"
+      
+      if (isTRUE(save_sample)) {
+        df_save_XX <- did_save_sample(df_est, group, time)
+        df_m <- merge(df, df_save_XX, by = c(group, time)) 
+        data.table::setorderv(df_m, c(group, time))
+        temp_obj <- append(temp_obj, list(df_m))
+        names(temp_obj)[length(temp_obj)] <- "save_sample"
+      }
+
       temp_obj <- append(temp_obj, list(by_levels[b]))
       names(temp_obj)[length(temp_obj)] <- "level"
       did_multiplegt_dyn <- append(did_multiplegt_dyn, list(temp_obj))
-      f_names <- c(f_names, paste0("by_level_",b))
+      f_names <- c(f_names, paste0("by_level_", b))
+    }
+
+  } else {
+    # ---- Sequential by-loop (original) ----
+    for (b in seq_along(by_levels)) {
+
+      if (by_levels[b] != "_no_by") {
+          if (!is.null(by)) {
+          df_main <- df[get(by) == by_levels[b]]
+          message(sprintf("Running did_multiplegt_dyn for %s = %s", by, by_levels[b]))
+          } else if (!is.null(by_path)) {
+            df_main <- df[path_XX == by_levels[b] | 
+                (yet_to_switch_XX == 1 & baseline_XX == substr(by_levels[b], 1L, 1L))]
+            df_main[, c("path_XX", "yet_to_switch_XX", "baseline_XX") := NULL]
+            message(sprintf("Running did_multiplegt_dyn for treatment path (%s)", by_levels[b]))
+          }
+      } else {
+        df_main <- df
+      }
+
+      df_est <- did_multiplegt_main(df = df_main, outcome = outcome, group =  group, time =  time, treatment = treatment, effects = effects, placebo = placebo, ci_level = ci_level,switchers = switchers, trends_nonparam = trends_nonparam, weight = weight, controls = controls, dont_drop_larger_lower = dont_drop_larger_lower, drop_if_d_miss_before_first_switch = drop_if_d_miss_before_first_switch, cluster = cluster, same_switchers = same_switchers, same_switchers_pl = same_switchers_pl, only_never_switchers = only_never_switchers, effects_equal = effects_equal, effects_equal_lb = effects_equal_lb, effects_equal_ub = effects_equal_ub, save_results = save_results, normalized = normalized, predict_het = predict_het, predict_het_hc2bm = predict_het_hc2bm, trends_lin = trends_lin, less_conservative_se = less_conservative_se, continuous = continuous)
+
+      temp_obj <- list(df_est$did_multiplegt_dyn)
+      names(temp_obj)[length(temp_obj)] <- "results"
+      temp_obj <- append(temp_obj, list(df_est$coef))
+      names(temp_obj)[length(temp_obj)] <- "coef"
+
+      # Add controls_globals (includes didmgt_XX, didmgt_Xy matrices for precision comparison)
+      if (!is.null(df_est$controls_globals)) {
+        temp_obj <- append(temp_obj, list(df_est$controls_globals))
+        names(temp_obj)[length(temp_obj)] <- "controls_globals"
+      }
+
+      if (!is.null(bootstrap)) {
+        if (!is.null(bootstrap_seed)) {
+          message(sprintf("\nBootstrap, %.0f reps (seed = %.0f):", bootstrap, bootstrap_seed))
+        } else {
+          message(sprintf("\nBootstrap, %.0f reps:", bootstrap))
+        }
+        temp_obj$results <- did_multiplegt_bootstrap(df = df_main, outcome = outcome, group =  group, time =  time, treatment = treatment, effects = effects, placebo = placebo, ci_level = ci_level,switchers = switchers, trends_nonparam = trends_nonparam, weight = weight, controls = controls, dont_drop_larger_lower = dont_drop_larger_lower, drop_if_d_miss_before_first_switch = drop_if_d_miss_before_first_switch, cluster = cluster, same_switchers = same_switchers, same_switchers_pl = same_switchers_pl, only_never_switchers = only_never_switchers, effects_equal = FALSE, save_results = NULL, normalized = normalized, predict_het = predict_het, trends_lin = trends_lin, less_conservative_se = less_conservative_se, continuous = continuous, bootstrap = bootstrap, bootstrap_seed = bootstrap_seed, base = temp_obj$results)
+      }
+
+      if (!is.null(design)) {
+        temp_out <- did_multiplegt_dyn_design(df_est, design, weight, by, by_levels[b], xlsx_design)
+        xlsx_design <- temp_out$design_file; temp_out$design_file <- NULL;
+        temp_obj <- append(temp_obj, list(temp_out))
+        names(temp_obj)[length(temp_obj)] <- "design"
+      }
+
+      if (!is.null(date_first_switch)) {
+        temp_out <- did_multiplegt_dyn_dfs(df_est, date_first_switch, by, by_levels[b], xlsx_dfs)
+        xlsx_dfs <- temp_out$dfs_file; temp_out$dfs_file <- NULL
+        temp_obj <- append(temp_obj, list(temp_out))
+        names(temp_obj)[length(temp_obj)] <- "date_first_switch"
+        append_dfs <- TRUE
+      }
+
+      if (isTRUE(normalized_weights)) {
+        temp_obj <- append(temp_obj, 
+            list(did_multiplegt_dyn_normweights(df_est, normalized, normalized_weights, same_switchers, continuous)))
+        names(temp_obj)[length(temp_obj)] <- "normalized_weights"
+      }
+
+      temp_obj <- append(temp_obj, list(did_multiplegt_dyn_graph(temp_obj$results, ggplot_args)))
+      names(temp_obj)[length(temp_obj)] <- "plot"
+      
+      if (isTRUE(save_sample)) {
+        df_save_XX <- did_save_sample(df_est, group, time)
+        df_m <- merge(df, df_save_XX, by = c(group, time)) 
+        data.table::setorderv(df_m, c(group, time))
+        # rownames(df_m) <- 1:nrow(df_m)
+        temp_obj <- append(temp_obj, list(df_m))
+        names(temp_obj)[length(temp_obj)] <- "save_sample"
+      }
+
+      if (by_levels[b] == "_no_by") {
+        did_multiplegt_dyn <- c(did_multiplegt_dyn, temp_obj)
+        f_names <- c(f_names, names(temp_obj))
+      } else {
+        temp_obj <- append(temp_obj, list(by_levels[b]))
+        names(temp_obj)[length(temp_obj)] <- "level"
+        did_multiplegt_dyn <- append(did_multiplegt_dyn, list(temp_obj))
+        f_names <- c(f_names, paste0("by_level_",b))
+      }
     }
   }
 

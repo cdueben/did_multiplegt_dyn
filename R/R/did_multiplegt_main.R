@@ -141,7 +141,8 @@ suppressWarnings({
 
   ######## 2. Data preparation steps
   #### Renaming the variables in the dataset
-  df <- data.table::as.data.table(df[, c(outcome, group, time, treatment, trends_nonparam, weight, controls, cluster, unlist(predict_het[1L]))])
+  cols <- c(outcome, group, time, treatment, trends_nonparam, weight, controls, cluster, unlist(predict_het[1L]))
+  df <- data.table::as.data.table(df)[, cols, with = FALSE]
   data.table::setnames(df, c(outcome, group, time, treatment), c("outcome", "group", "time", "treatment"))
 
   #### Grouping together trends_nonparam variables

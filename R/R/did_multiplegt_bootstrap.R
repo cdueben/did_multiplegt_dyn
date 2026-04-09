@@ -87,45 +87,144 @@ did_multiplegt_bootstrap <- function(
     group_col <- group
     time_col <- time
 
-    for (j in 1:bootstrap) {
-        # Fast C++ bootstrap sampling (uses R's RNG, seed already set above)
-        sampled_idx <- bootstrap_sample_indices_cpp(group_info)
+    n_daemons <- .mirai_n_daemons()
 
-        # Convert to 1-based R indexing
-        sampled_idx <- sampled_idx + 1L
-        df_boot <- df[sampled_idx, ]
+    if (n_daemons > 0L) {
+        # ---- Parallel bootstrap via mirai ----
 
-        # Sort the bootstrap sample
-        data.table::setorderv(df_boot, c(group_col, time_col))
-
-        suppressMessages({
-        df_est <- did_multiplegt_main(df = df_boot, outcome = outcome, group = group, time = time, treatment = treatment, effects = effects, placebo = placebo, ci_level = ci_level, switchers = switchers, trends_nonparam = trends_nonparam, weight = weight, controls = controls, dont_drop_larger_lower = dont_drop_larger_lower, drop_if_d_miss_before_first_switch = drop_if_d_miss_before_first_switch, cluster = cluster, same_switchers = same_switchers, same_switchers_pl = same_switchers_pl, only_never_switchers = only_never_switchers, effects_equal = effects_equal, save_results = save_results, normalized = normalized, predict_het = predict_het, trends_lin = trends_lin, less_conservative_se = less_conservative_se, continuous = continuous)})
-
-        res <- df_est$did_multiplegt_dyn
-
-        # Vectorized result extraction for effects
-        n_res_effects <- nrow(res$Effects)
-        if (n_res_effects > 0L) {
-            n_copy <- min(ncol(bresults_effects), n_res_effects)
-            bresults_effects[j, 1:n_copy] <- res$Effects[1:n_copy, 1L]
+        # Pre-generate all bootstrap sample indices (fast, preserves RNG reproducibility)
+        boot_indices <- vector("list", bootstrap)
+        for (j in seq_len(bootstrap)) {
+            boot_indices[[j]] <- bootstrap_sample_indices_cpp(group_info) + 1L
         }
 
-        # ATE extraction
-        if (!is.null(bresults_ATE) && !is.null(res$ATE[1L])) {
-            bresults_ATE[j, 1L] <- res$ATE[1L]
+        n_workers <- min(n_daemons, bootstrap)
+        chunks <- split(seq_len(bootstrap),
+            rep(seq_len(n_workers), length.out = bootstrap))
+        message(sprintf("  Using %d mirai workers...", n_workers))
+
+        main_args <- list(
+            outcome = outcome, group = group, time = time,
+            treatment = treatment, effects = effects, placebo = placebo,
+            ci_level = ci_level, switchers = switchers,
+            trends_nonparam = trends_nonparam, weight = weight,
+            controls = controls,
+            dont_drop_larger_lower = dont_drop_larger_lower,
+            drop_if_d_miss_before_first_switch = drop_if_d_miss_before_first_switch,
+            cluster = cluster, same_switchers = same_switchers,
+            same_switchers_pl = same_switchers_pl,
+            only_never_switchers = only_never_switchers,
+            effects_equal = effects_equal, save_results = save_results,
+            normalized = normalized, predict_het = predict_het,
+            trends_lin = trends_lin, less_conservative_se = less_conservative_se,
+            continuous = continuous
+        )
+
+        tasks <- vector("list", length(chunks))
+        for (k in seq_along(chunks)) {
+            chunk_idx <- boot_indices[chunks[[k]]]
+            tasks[[k]] <- mirai::mirai(
+                {
+                    results <- vector("list", length(chunk_idx))
+                    for (i in seq_along(chunk_idx)) {
+                        df_boot <- df[chunk_idx[[i]], ]
+                        data.table::setorderv(df_boot,
+                            c(main_args[["group"]], main_args[["time"]]))
+                        suppressMessages({
+                            df_est <- do.call(
+                                DIDmultiplegtDYN:::did_multiplegt_main,
+                                c(list(df = df_boot), main_args)
+                            )
+                        })
+                        res <- df_est$did_multiplegt_dyn
+                        n_eff <- nrow(res$Effects)
+                        results[[i]] <- list(
+                            effects = if (n_eff > 0L)
+                                res$Effects[1:n_eff, 1L] else numeric(0),
+                            ate = res$ATE[1L],
+                            placebos = if (!is.null(res$Placebos) &&
+                                nrow(res$Placebos) > 0L)
+                                res$Placebos[, 1L] else NULL
+                        )
+                    }
+                    results
+                },
+                chunk_idx = chunk_idx,
+                df = df,
+                main_args = main_args,
+                .compute = .mirai_compute
+            )
         }
 
-        # Vectorized result extraction for placebos
-        if (!is.null(bresults_placebo) && !is.null(res$Placebos)) {
-            n_res_placebo <- nrow(res$Placebos)
-            if (n_res_placebo > 0L) {
-                n_copy <- min(ncol(bresults_placebo), n_res_placebo)
-                bresults_placebo[j, 1:n_copy] <- res$Placebos[1:n_copy, 1L]
+        # Collect and assemble results
+        all_results <- list()
+        for (k in seq_along(tasks)) {
+            chunk_res <- tasks[[k]]$data
+            if (!is.list(chunk_res)) {
+                msg <- tryCatch(conditionMessage(chunk_res),
+                    error = function(e) as.character(chunk_res))
+                stop("Bootstrap worker failed: ", paste(msg, collapse = " "))
+            }
+            all_results <- c(all_results, chunk_res)
+        }
+
+        for (j in seq_along(all_results)) {
+            r <- all_results[[j]]
+            n_copy <- min(ncol(bresults_effects), length(r$effects))
+            if (n_copy > 0L) bresults_effects[j, 1:n_copy] <- r$effects[1:n_copy]
+            if (!is.null(bresults_ATE) && !is.null(r$ate)) {
+                bresults_ATE[j, 1L] <- r$ate
+            }
+            if (!is.null(bresults_placebo) && !is.null(r$placebos)) {
+                n_copy_pl <- min(ncol(bresults_placebo), length(r$placebos))
+                if (n_copy_pl > 0L) {
+                    bresults_placebo[j, 1:n_copy_pl] <- r$placebos[1:n_copy_pl]
+                }
             }
         }
 
-        rm(res, df_est, df_boot)
-        progressBar(j, bootstrap)
+    } else {
+        # ---- Sequential bootstrap (original) ----
+        for (j in 1:bootstrap) {
+            # Fast C++ bootstrap sampling (uses R's RNG, seed already set above)
+            sampled_idx <- bootstrap_sample_indices_cpp(group_info)
+
+            # Convert to 1-based R indexing
+            sampled_idx <- sampled_idx + 1L
+            df_boot <- df[sampled_idx, ]
+
+            # Sort the bootstrap sample
+            data.table::setorderv(df_boot, c(group_col, time_col))
+
+            suppressMessages({
+            df_est <- did_multiplegt_main(df = df_boot, outcome = outcome, group = group, time = time, treatment = treatment, effects = effects, placebo = placebo, ci_level = ci_level, switchers = switchers, trends_nonparam = trends_nonparam, weight = weight, controls = controls, dont_drop_larger_lower = dont_drop_larger_lower, drop_if_d_miss_before_first_switch = drop_if_d_miss_before_first_switch, cluster = cluster, same_switchers = same_switchers, same_switchers_pl = same_switchers_pl, only_never_switchers = only_never_switchers, effects_equal = effects_equal, save_results = save_results, normalized = normalized, predict_het = predict_het, trends_lin = trends_lin, less_conservative_se = less_conservative_se, continuous = continuous)})
+
+            res <- df_est$did_multiplegt_dyn
+
+            # Vectorized result extraction for effects
+            n_res_effects <- nrow(res$Effects)
+            if (n_res_effects > 0L) {
+                n_copy <- min(ncol(bresults_effects), n_res_effects)
+                bresults_effects[j, 1:n_copy] <- res$Effects[1:n_copy, 1L]
+            }
+
+            # ATE extraction
+            if (!is.null(bresults_ATE) && !is.null(res$ATE[1L])) {
+                bresults_ATE[j, 1L] <- res$ATE[1L]
+            }
+
+            # Vectorized result extraction for placebos
+            if (!is.null(bresults_placebo) && !is.null(res$Placebos)) {
+                n_res_placebo <- nrow(res$Placebos)
+                if (n_res_placebo > 0L) {
+                    n_copy <- min(ncol(bresults_placebo), n_res_placebo)
+                    bresults_placebo[j, 1:n_copy] <- res$Placebos[1:n_copy, 1L]
+                }
+            }
+
+            rm(res, df_est, df_boot)
+            progressBar(j, bootstrap)
+        }
     }
 
     ci_level <- ci_level / 100
