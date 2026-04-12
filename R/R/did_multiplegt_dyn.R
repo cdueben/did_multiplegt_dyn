@@ -441,7 +441,7 @@ did_multiplegt_dyn <- function(
         same_switchers_pl = same_switchers_pl,
         only_never_switchers = only_never_switchers,
         effects_equal = FALSE, save_results = NULL,
-        normalized = normalized, predict_het = predict_het,
+        normalized = normalized, predict_het = NULL,
         trends_lin = trends_lin, less_conservative_se = less_conservative_se,
         continuous = continuous
       )
@@ -576,7 +576,7 @@ did_multiplegt_dyn <- function(
         } else {
           message(sprintf("\nBootstrap, %.0f reps:", bootstrap))
         }
-        temp_obj$results <- did_multiplegt_bootstrap(df = df_main, outcome = outcome, group =  group, time =  time, treatment = treatment, effects = effects, placebo = placebo, ci_level = ci_level,switchers = switchers, trends_nonparam = trends_nonparam, weight = weight, controls = controls, dont_drop_larger_lower = dont_drop_larger_lower, drop_if_d_miss_before_first_switch = drop_if_d_miss_before_first_switch, cluster = cluster, same_switchers = same_switchers, same_switchers_pl = same_switchers_pl, only_never_switchers = only_never_switchers, effects_equal = FALSE, save_results = NULL, normalized = normalized, predict_het = predict_het, trends_lin = trends_lin, less_conservative_se = less_conservative_se, continuous = continuous, bootstrap = bootstrap, bootstrap_seed = bootstrap_seed, base = temp_obj$results)
+        temp_obj$results <- did_multiplegt_bootstrap(df = df_main, outcome = outcome, group =  group, time =  time, treatment = treatment, effects = effects, placebo = placebo, ci_level = ci_level,switchers = switchers, trends_nonparam = trends_nonparam, weight = weight, controls = controls, dont_drop_larger_lower = dont_drop_larger_lower, drop_if_d_miss_before_first_switch = drop_if_d_miss_before_first_switch, cluster = cluster, same_switchers = same_switchers, same_switchers_pl = same_switchers_pl, only_never_switchers = only_never_switchers, effects_equal = FALSE, save_results = NULL, normalized = normalized, predict_het = NULL, trends_lin = trends_lin, less_conservative_se = less_conservative_se, continuous = continuous, bootstrap = bootstrap, bootstrap_seed = bootstrap_seed, base = temp_obj$results)
       }
 
       if (!is.null(design)) {

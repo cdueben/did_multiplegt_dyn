@@ -117,7 +117,8 @@ did_multiplegt_bootstrap <- function(
             effects_equal = effects_equal, save_results = save_results,
             normalized = normalized, predict_het = predict_het,
             trends_lin = trends_lin, less_conservative_se = less_conservative_se,
-            continuous = continuous
+            continuous = continuous,
+            point_estimates_only = TRUE
         )
 
         tasks <- vector("list", length(chunks))
@@ -197,7 +198,7 @@ did_multiplegt_bootstrap <- function(
             data.table::setorderv(df_boot, c(group_col, time_col))
 
             suppressMessages({
-            df_est <- did_multiplegt_main(df = df_boot, outcome = outcome, group = group, time = time, treatment = treatment, effects = effects, placebo = placebo, ci_level = ci_level, switchers = switchers, trends_nonparam = trends_nonparam, weight = weight, controls = controls, dont_drop_larger_lower = dont_drop_larger_lower, drop_if_d_miss_before_first_switch = drop_if_d_miss_before_first_switch, cluster = cluster, same_switchers = same_switchers, same_switchers_pl = same_switchers_pl, only_never_switchers = only_never_switchers, effects_equal = effects_equal, save_results = save_results, normalized = normalized, predict_het = predict_het, trends_lin = trends_lin, less_conservative_se = less_conservative_se, continuous = continuous)})
+            df_est <- did_multiplegt_main(df = df_boot, outcome = outcome, group = group, time = time, treatment = treatment, effects = effects, placebo = placebo, ci_level = ci_level, switchers = switchers, trends_nonparam = trends_nonparam, weight = weight, controls = controls, dont_drop_larger_lower = dont_drop_larger_lower, drop_if_d_miss_before_first_switch = drop_if_d_miss_before_first_switch, cluster = cluster, same_switchers = same_switchers, same_switchers_pl = same_switchers_pl, only_never_switchers = only_never_switchers, effects_equal = effects_equal, save_results = save_results, normalized = normalized, predict_het = predict_het, trends_lin = trends_lin, less_conservative_se = less_conservative_se, continuous = continuous, point_estimates_only = TRUE)})
 
             res <- df_est$did_multiplegt_dyn
 

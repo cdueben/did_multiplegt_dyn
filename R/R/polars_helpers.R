@@ -1,4 +1,4 @@
-﻿#' @noRd
+#' @noRd
 NULL
 
 # Data.table Helper Functions for DIDmultiplegtDYN

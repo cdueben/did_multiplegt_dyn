@@ -84,10 +84,13 @@ invsym_r <- function(M, tol = 1e-14) {
 #' @param less_conservative_se less_conservative_se
 #' @param continuous continuous
 #' @param data_only data_only
+#' @param point_estimates_only If TRUE, skip variance-covariance, F-tests, and
+#'   heterogeneity analysis. Used by bootstrap iterations that only need point
+#'   estimates.
 #' @note Uses data.table backend
 
 #' @returns A list with the final estimation dataframe and other relevant matrices and scalars.
-#' @noRd 
+#' @noRd
 did_multiplegt_main <- function(
   df,
   outcome,
@@ -117,7 +120,8 @@ did_multiplegt_main <- function(
   trends_lin,
   less_conservative_se,
   continuous,
-  data_only = FALSE
+  data_only = FALSE,
+  point_estimates_only = FALSE
   ) {
 
 # Pure data.table backend
@@ -1917,6 +1921,53 @@ suppressWarnings({
   delta_D_num_total <- sum(df[["delta_D_g_num_XX"]], na.rm = TRUE)
   delta_D_denom_total <- sum(df[["delta_D_g_XX"]], na.rm = TRUE)
   delta_D_avg_total <- delta_D_num_total / delta_D_denom_total
+
+  ###### Fast path for bootstrap: return point estimates only
+  if (isTRUE(point_estimates_only)) {
+    rownames(mat_res_XX) <- rownames
+    colnames(mat_res_XX) <- c("Estimate", "SE", "LB CI", "UB CI", "N", "Switchers", "N.w", "Switchers.w", "Time")
+
+    Effect_mat <- matrix(mat_res_XX[1:l_XX, 1:(ncol(mat_res_XX) - 1)],
+                         ncol = ncol(mat_res_XX) - 1, nrow = l_XX)
+    rownames(Effect_mat) <- rownames[1:l_XX]
+    colnames(Effect_mat) <- c("Estimate", "SE", "LB CI", "UB CI", "N", "Switchers", "N.w", "Switchers.w")
+
+    ATE_mat <- matrix(mat_res_XX[l_XX + 1, 1:(ncol(mat_res_XX) - 1)],
+                      ncol = ncol(mat_res_XX) - 1, nrow = 1)
+    rownames(ATE_mat) <- rownames[l_XX + 1]
+    colnames(ATE_mat) <- c("Estimate", "SE", "LB CI", "UB CI", "N", "Switchers", "N.w", "Switchers.w")
+
+    did_multiplegt_dyn <- list(
+      N_Effects = l_XX,
+      N_Placebos = l_placebo_XX,
+      Effects = Effect_mat,
+      ATE = ATE_mat,
+      delta_D_avg_total = delta_D_avg_total,
+      max_pl = max_pl_XX,
+      max_pl_gap = max_pl_gap_XX
+    )
+
+    if (l_placebo_XX > 0) {
+      Placebo_mat <- matrix(mat_res_XX[(l_XX + 2):nrow(mat_res_XX), 1:(ncol(mat_res_XX) - 1)],
+                            ncol = ncol(mat_res_XX) - 1, nrow = l_placebo_XX)
+      rownames(Placebo_mat) <- rownames[(l_XX + 2):nrow(mat_res_XX)]
+      colnames(Placebo_mat) <- c("Estimate", "SE", "LB CI", "UB CI", "N", "Switchers", "N.w", "Switchers.w")
+      did_multiplegt_dyn$Placebos <- Placebo_mat
+    }
+
+    ret <- list(
+      df = df,
+      did_multiplegt_dyn = did_multiplegt_dyn,
+      delta = list(),
+      l_XX = l_XX,
+      T_max_XX = T_max_XX,
+      mat_res_XX = mat_res_XX
+    )
+    if (placebo != 0) ret$l_placebo_XX <- l_placebo_XX
+    ret$coef <- list(b = mat_res_XX[-(l_XX + 1), 1], vcov = NULL)
+    return(ret)
+  }
+
   ###### 6. Computing p-values from the tests
 
   # If the option cluster is specified, we have previously replaced U_Gg_var_glob_pl_`i'_XX by clust_U_Gg_var_glob_pl_`i'_XX, and U_Gg_var_glob_`i'_XX by clust_U_Gg_var_glob_`i'_XX.
