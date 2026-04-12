@@ -185,7 +185,7 @@ did_multiplegt_bootstrap <- function(
 
     } else {
         # ---- Sequential bootstrap (original) ----
-        for (j in 1:bootstrap) {
+        for (j in seq_len(bootstrap)) {
             # Fast C++ bootstrap sampling (uses R's RNG, seed already set above)
             sampled_idx <- bootstrap_sample_indices_cpp(group_info)
 

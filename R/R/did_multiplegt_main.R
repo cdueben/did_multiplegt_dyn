@@ -659,45 +659,56 @@ suppressWarnings({
     data.table::setorder(df, group_XX, time_XX)
 
     ## 1) First differences of each control + missing flag
-    count_controls <- 0L
+    count_controls <- length(controls)
+    diff_cols_main <- sprintf("diff_X%d_XX", 1:count_controls)
+
+    # Compute all first differences
+    for (j in seq_len(count_controls)) {
+      df[, (diff_cols_main[j]) := get(controls[j]) - data.table::shift(get(controls[j]), 1), by = "group_XX"]
+    }
+
+    # fd_X_all_non_missing_XX = 1 iff ALL diff_X columns are non-NA for that row
     df[, fd_X_all_non_missing_XX := 1L]
-
-    for (var in controls) {
-      count_controls <- count_controls + 1L
-      diff_col <- sprintf("diff_X%d_XX", count_controls)
-
-      # Group-wise first difference
-      df[, (diff_col) := get(var) - data.table::shift(get(var), 1), by = "group_XX"]
-
-      # If diff is NA, mark as missing
-      df[, fd_X_all_non_missing_XX := data.table::fifelse(is.na(get(diff_col)), 0L, fd_X_all_non_missing_XX)]
+    for (j in seq_len(count_controls)) {
+      df[, fd_X_all_non_missing_XX := data.table::fifelse(is.na(get(diff_cols_main[j])), 0L, fd_X_all_non_missing_XX)]
     }
 
     ## 2) Residualization prep
-    count_controls <- 0L
     mycontrols_XX <- character(0L)
     grp_cols <- c("time_XX", "d_sq_XX")
     if (!is.null(trends_nonparam)) grp_cols <- c(grp_cols, trends_nonparam)
 
-    for (var in controls) {
-      count_controls <- count_controls + 1L
-      diff_col <- sprintf("diff_X%d_XX", count_controls)
-      avg_col <- sprintf("avg_diff_X%d_XX", count_controls)
-      resid_col <- sprintf("resid_X%d_time_FE_XX", count_controls)
-      prod_col <- sprintf("prod_X%d_Ngt_XX", count_controls)
+    # Shared: mask and weights (same for all controls — compute once)
+    df[, .mask_ctrl := (ever_change_d_XX == 0) & !is.na(diff_y_XX) & (fd_X_all_non_missing_XX == 1L)]
+    df[, .N_for_ctrl := data.table::fifelse(.mask_ctrl, N_gt_XX, 0)]
+    df[, sum_weights_control_XX := sum(.N_for_ctrl, na.rm = TRUE), by = grp_cols]
+    df[, sum_weights_control_XX := data.table::fifelse(.mask_ctrl, sum_weights_control_XX, NA_real_)]
 
-      # Create mask: control obs (never switched, non-missing y, controls non-missing)
-      df[, .mask_ctrl := (ever_change_d_XX == 0) & !is.na(diff_y_XX) & (fd_X_all_non_missing_XX == 1L)]
+    # Shared: diff_y_wXX (same for all controls — compute once)
+    df[, diff_y_wXX := sqrt(N_gt_XX) * diff_y_XX]
 
-      # Sum of N_gt for controls within mask
-      df[, .N_for_ctrl := data.table::fifelse(.mask_ctrl, N_gt_XX, 0)]
-      df[, sum_weights_control_XX := sum(.N_for_ctrl, na.rm = TRUE), by = grp_cols]
-      df[, sum_weights_control_XX := data.table::fifelse(.mask_ctrl, sum_weights_control_XX, NA_real_)]
+    # Compute all masked weighted sums: avg_diff_masked_j = fifelse(mask, N_gt * diff_X_j, 0)
+    avg_masked_cols <- sprintf("__avg_diff_masked_%d__", 1:count_controls)
+    for (j in seq_len(count_controls)) {
+      data.table::set(df, j = avg_masked_cols[j],
+        value = data.table::fifelse(df[[".mask_ctrl"]], df[["N_gt_XX"]] * df[[diff_cols_main[j]]], 0))
+    }
 
-      # Weighted sum of first-diffs (masked)
-      df[, avg_diff_temp_XX := N_gt_XX * get(diff_col)]
-      df[, .avg_diff_temp_masked := data.table::fifelse(.mask_ctrl, avg_diff_temp_XX, 0)]
-      df[, (avg_col) := sum(.avg_diff_temp_masked, na.rm = TRUE), by = grp_cols]
+    # Batch by-group sum for all avg columns at once
+    avg_cols_main <- sprintf("avg_diff_X%d_XX", 1:count_controls)
+    df[, (avg_cols_main) := lapply(.SD, sum, na.rm = TRUE), by = grp_cols, .SDcols = avg_masked_cols]
+
+    # Clean up temp masked columns
+    df[, (avg_masked_cols) := NULL]
+
+    # Compute residuals and products per control (element-wise, cheap)
+    for (j in seq_len(count_controls)) {
+      avg_col <- avg_cols_main[j]
+      diff_col <- diff_cols_main[j]
+      resid_col <- sprintf("resid_X%d_time_FE_XX", j)
+      prod_col <- sprintf("prod_X%d_Ngt_XX", j)
+
+      # Mask and divide by weights
       df[, (avg_col) := data.table::fifelse(.mask_ctrl, get(avg_col), NA_real_)]
       df[, (avg_col) := get(avg_col) / sum_weights_control_XX]
 
@@ -706,8 +717,7 @@ suppressWarnings({
       df[is.na(get(resid_col)), (resid_col) := 0]
       mycontrols_XX <- c(mycontrols_XX, resid_col)
 
-      # Prepare product with deltaY
-      df[, diff_y_wXX := sqrt(N_gt_XX) * diff_y_XX]
+      # Product
       df[, (prod_col) := data.table::fifelse(is.na(sqrt(N_gt_XX) * get(resid_col)), 0, sqrt(N_gt_XX) * get(resid_col))]
     }
 
@@ -1722,12 +1732,12 @@ suppressWarnings({
     assign("N_switchers_effect_average", N_switchers_effect_XX)
 
     # Build count_global using max across all effect counts
-    count_cols_mat <- do.call(cbind, lapply(1:l_XX, function(i) {
+    count_cols_list <- lapply(1:l_XX, function(i) {
       v <- df[[paste0("count", i, "_global_XX")]]
       v[is.na(v)] <- 0
       v
-    }))
-    df[, count_global_XX := apply(count_cols_mat, 1, max)]
+    })
+    df[, count_global_XX := do.call(pmax, count_cols_list)]
 
     # Count observations
     N_effect_XX <- dt_sum_col(df, "count_global_XX")

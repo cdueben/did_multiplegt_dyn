@@ -103,3 +103,35 @@ dt_uniqueN_over <- function(df, count_col, by_cols, new_col, filter_idx = NULL) 
   invisible(df)
 }
 
+#' Compute group-boundary row indices for vectorized shift
+#' For data sorted by (group_col, time_col) with contiguous groups,
+#' finds the first `n` rows of each group that must be set to NA
+#' after a global lag operation.
+#' @param group_vec integer/numeric vector of group IDs (sorted, contiguous)
+#' @param n shift amount
+#' @param N_rows total number of rows
+#' @return integer vector of row indices to set to NA
+#' @noRd
+dt_shift_boundary_rows <- function(group_vec, n, N_rows) {
+  # Find where groups change
+  boundary_starts <- which(c(TRUE, group_vec[-1L] != group_vec[-N_rows]))
+  # For each boundary, rows boundary_start:(boundary_start + n - 1) need NA
+  fix_rows <- as.integer(rep(boundary_starts, each = n) + rep(0:(n - 1L), times = length(boundary_starts)))
+  fix_rows[fix_rows <= N_rows]
+}
+
+#' Vectorized group-aware lag (no data.table by-group dispatch)
+#' Equivalent to shift(x, n, type = "lag") by group, but operates on
+#' a pre-sorted vector with contiguous groups. Avoids per-call by-group overhead.
+#' @param x numeric vector
+#' @param n lag amount (positive integer)
+#' @param fix_rows pre-computed boundary rows from dt_shift_boundary_rows
+#' @param N_rows length of x
+#' @return numeric vector: x lagged by n within groups, NA at boundaries
+#' @noRd
+dt_vec_shift <- function(x, n, fix_rows, N_rows) {
+  shifted <- c(rep(NA_real_, n), x[1:(N_rows - n)])
+  shifted[fix_rows] <- NA_real_
+  shifted
+}
+

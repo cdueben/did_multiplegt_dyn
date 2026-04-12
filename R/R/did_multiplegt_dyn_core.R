@@ -230,9 +230,9 @@ did_multiplegt_dyn_core <- function(
     # Pre-compute still_switcher condition (same for all i)
     df[, `__still_sw_XX__` := (F_g_XX - 1L + effects <= T_g_XX) & (N_g_control_check_XX == effects)]
 
-    if (same_switchers_pl == TRUE) {
+    if (same_switchers_pl == TRUE && placebo > 0L) {
       df[, N_g_control_check_pl_XX := 0.0]
-      for (q in 1:placebo) {
+      for (q in seq_len(placebo)) {
         df[, diff_y_last_XX := outcome_XX - data.table::shift(outcome_XX, -q), by = "group_XX"]
         df[, never_change_d_last_XX := data.table::fifelse(
           !is.na(diff_y_last_XX) & F_g_XX > time_XX, 1.0, NA_real_
@@ -391,119 +391,154 @@ did_multiplegt_dyn_core <- function(
       df[, T_d_XX := max(F_g_XX, na.rm = TRUE), by = "d_sq_int_XX"]
       df[, T_d_XX := T_d_XX - 1]
 
-      count_controls <- 0L
-      for (var in controls) {
-        count_controls <- count_controls + 1L
+      count_controls <- length(controls)
+      N_inc_val <- get(cn$N_scalar)
 
-        # diff_X
-        diff_X_col <- paste0("diff_X", count_controls, "_", i, "_XX")
-        df[, (diff_X_col) := get(var) - data.table::shift(get(var), i), by = "group_XX"]
+      # --- Phase 1: Compute all diff_X and diff_X_N columns ---
+      # Vectorized shift: global lag + boundary fixup (avoids C by-group dispatches)
+      diff_X_cols <- paste0("diff_X", 1:count_controls, "_", i, "_XX")
+      diff_X_N_cols <- paste0("diff_X", 1:count_controls, "_", i, "_N_XX")
+      N_rows_core <- nrow(df)
+      fix_rows_i <- dt_shift_boundary_rows(df[["group_XX"]], i, N_rows_core)
+      N_gt_vec_core <- df[["N_gt_XX"]]
+      for (j in seq_len(count_controls)) {
+        ctrl_vec <- df[[controls[j]]]
+        shifted_vec <- dt_vec_shift(ctrl_vec, i, fix_rows_i, N_rows_core)
+        diff_vec <- ctrl_vec - shifted_vec
+        data.table::set(df, j = diff_X_cols[j], value = diff_vec)
+        data.table::set(df, j = diff_X_N_cols[j], value = N_gt_vec_core * diff_vec)
+      }
 
-        # diff_X * N_gt
-        diff_X_N_col <- paste0("diff_X", count_controls, "_", i, "_N_XX")
-        df[, (diff_X_N_col) := N_gt_XX * get(diff_X_col)]
+      # --- Phase 2: For each baseline level, compute shared quantities once, then batch ---
+      for (l in levels_d_sq_XX) {
+        l_num <- as.numeric(l)
 
-        for (l in levels_d_sq_XX) {
-          l_num <- as.numeric(l)
+        # Shared: safe_ratio (same for all controls)
+        safe_ratio <- data.table::fifelse(df[[N_gt_ctrl_col]] == 0, 0, df[[N_t_g_col]] / df[[N_gt_ctrl_col]])
 
-          # m_increase_g column
-          m_g_col <- paste0("m", increase_XX, "_g_", l, "_", count_controls, "_", i, "_XX")
-          N_inc_val <- get(cn$N_scalar)
+        # Shared: common_m factor for m_g computation
+        common_m <- as.numeric(df[["d_sq_int_XX"]] == l_num & i <= df[["T_g_XX"]] - 2) *
+          (G_XX / N_inc_val) *
+          (df[[dist_col]] - safe_ratio * df[[never_col]]) *
+          as.numeric(df[["time_XX"]] >= i + 1L & df[["time_XX"]] <= df[["T_g_XX"]])
 
-          # Safe division to avoid 0/0 = NaN
-          safe_ratio <- data.table::fifelse(df[[N_gt_ctrl_col]] == 0, 0, df[[N_t_g_col]] / df[[N_gt_ctrl_col]])
-          df[, (m_g_col) :=
-            as.numeric(i <= T_g_XX - 2 & d_sq_int_XX == l_num) *
-            (G_XX / N_inc_val) *
-            (get(dist_col) - safe_ratio * get(never_col)) *
-            as.numeric(time_XX >= i + 1 & time_XX <= T_g_XX) *
-            get(diff_X_N_col)
-          ]
+        # Compute all m_g columns: m_g_j = common_m * diff_X_N_j
+        m_g_cols <- paste0("m", increase_XX, "_g_", l, "_", 1:count_controls, "_", i, "_XX")
+        for (j in seq_len(count_controls)) {
+          data.table::set(df, j = m_g_cols[j], value = common_m * df[[diff_X_N_cols[j]]])
+        }
 
-          # Sum by group
-          m_col <- paste0("m", increase_XX, "_", l, "_", count_controls, "_", i, "_XX")
-          df[, (m_col) := sum(get(m_g_col), na.rm = TRUE), by = "group_XX"]
+        # Batch by-group sum for all m columns at once
+        m_cols <- paste0("m", increase_XX, "_", l, "_", 1:count_controls, "_", i, "_XX")
+        df[, (m_cols) := lapply(.SD, sum, na.rm = TRUE), by = "group_XX", .SDcols = m_g_cols]
 
-          # Set NA where not first_obs
-          df[first_obs_by_gp_XX != 1L, (m_col) := NA_real_]
+        # Set NA where not first_obs (batch)
+        not_first_idx <- which(df[["first_obs_by_gp_XX"]] != 1L)
+        if (length(not_first_idx) > 0L) {
+          for (j in seq_len(count_controls)) {
+            data.table::set(df, i = not_first_idx, j = m_cols[j], value = NA_real_)
+          }
+        }
 
-          # M (scalar mean)
-          M_col <- paste0("M", increase_XX, "_", l, "_", count_controls, "_", i, "_XX")
-          M_val <- dt_scalar_sum(df, m_col) / G_XX
-          data.table::set(df, j = M_col, value = M_val)
+        # Compute all M scalars
+        M_cols <- paste0("M", increase_XX, "_", l, "_", 1:count_controls, "_", i, "_XX")
+        for (j in seq_len(count_controls)) {
+          M_val <- sum(df[[m_cols[j]]], na.rm = TRUE) / G_XX
+          data.table::set(df, j = M_cols[j], value = M_val)
+        }
 
-          # E_hat_denom - only count rows where diff_y_XX is not missing
-          df[, dummy_XX := data.table::fifelse(
-            F_g_XX > time_XX & d_sq_int_XX == l_num & !is.na(diff_y_XX),
-            1.0, 0.0
-          )]
+        # Shared: E_hat_denom (same for all controls — compute once)
+        df[, dummy_XX := data.table::fifelse(
+          F_g_XX > time_XX & d_sq_int_XX == l_num & !is.na(diff_y_XX),
+          1.0, 0.0
+        )]
+        E_hat_denom_shared_col <- paste0("E_hat_denom_shared_", l, "_XX")
+        df[, (E_hat_denom_shared_col) := sum(get("dummy_XX"), na.rm = TRUE), by = c("time_XX", "d_sq_int_XX")]
+        df[d_sq_int_XX != l_num, (E_hat_denom_shared_col) := NA_real_]
 
-          E_hat_denom_col <- paste0("E_hat_denom_", count_controls, "_", l, "_XX")
-          df[, (E_hat_denom_col) := sum(get("dummy_XX"), na.rm = TRUE), by = c("time_XX", "d_sq_int_XX")]
+        # Also write per-control E_hat_denom columns (in case referenced by name elsewhere)
+        for (j in seq_len(count_controls)) {
+          E_hat_denom_col <- paste0("E_hat_denom_", j, "_", l, "_XX")
+          data.table::set(df, j = E_hat_denom_col, value = df[[E_hat_denom_shared_col]])
+        }
 
-          df[d_sq_int_XX != l_num, (E_hat_denom_col) := NA_real_]
+        # Shared: E_y_hat_gt
+        E_y_hat_col <- paste0("E_y_hat_gt_", l, "_XX")
+        E_y_hat_int_col <- paste0("E_y_hat_gt_int_", l, "_XX")
+        df[, (E_y_hat_col) := get(E_y_hat_int_col) * as.numeric(get(E_hat_denom_shared_col) >= 2)]
 
-          # E_y_hat_gt
-          E_y_hat_col <- paste0("E_y_hat_gt_", l, "_XX")
-          E_y_hat_int_col <- paste0("E_y_hat_gt_int_", l, "_XX")
-          df[, (E_y_hat_col) := get(E_y_hat_int_col) * as.numeric(get(E_hat_denom_col) >= 2)]
+        # Shared: N_c
+        N_c_temp_col <- paste0("N_c_", l, "_temp_XX")
+        N_c_col <- paste0("N_c_", l, "_XX")
+        df[, (N_c_temp_col) :=
+          N_gt_XX *
+          as.numeric(d_sq_int_XX == l_num & time_XX >= 2L &
+            time_XX <= T_d_XX & time_XX < F_g_XX & !is.na(diff_y_XX))
+        ]
+        N_c_val <- dt_scalar_sum(df, N_c_temp_col)
+        data.table::set(df, j = N_c_col, value = N_c_val)
 
-          # N_c columns and in_sum
-          N_c_temp_col <- paste0("N_c_", l, "_temp_XX")
-          N_c_col <- paste0("N_c_", l, "_XX")
+        # Shared: in_sum_adj and common_insumtemp factor
+        E_hat_denom_vec <- df[[E_hat_denom_shared_col]]
+        in_sum_adj_vec <- data.table::fifelse(
+          E_hat_denom_vec > 1L,
+          sqrt(E_hat_denom_vec / (E_hat_denom_vec - 1L)) - 1,
+          0.0
+        )
+        common_insumtemp <- (1.0 + as.numeric(E_hat_denom_vec >= 2L) * in_sum_adj_vec) *
+          (df[["diff_y_XX"]] - df[[E_y_hat_col]]) *
+          as.numeric(df[["time_XX"]] >= 2L & df[["time_XX"]] <= df[["F_g_XX"]] - 1L) /
+          N_c_val
 
-          df[, (N_c_temp_col) :=
-            N_gt_XX *
-            as.numeric(d_sq_int_XX == l_num & time_XX >= 2L &
-              time_XX <= T_d_XX & time_XX < F_g_XX & !is.na(diff_y_XX))
-          ]
+        # Compute all in_sum_temp columns: in_sum_temp_j = prod_X_j * common_insumtemp
+        in_sum_temp_cols <- paste0("in_sum_temp_", 1:count_controls, "_", l, "_XX")
+        for (j in seq_len(count_controls)) {
+          prod_X_col <- paste0("prod_X", j, "_Ngt_XX")
+          data.table::set(df, j = in_sum_temp_cols[j], value = df[[prod_X_col]] * common_insumtemp)
+        }
 
-          N_c_val <- dt_scalar_sum(df, N_c_temp_col)
-          data.table::set(df, j = N_c_col, value = N_c_val)
+        # Also write per-control in_sum_adj columns (for consistency)
+        for (j in seq_len(count_controls)) {
+          in_sum_adj_col <- paste0("in_sum_temp_adj_", j, "_", l, "_XX")
+          data.table::set(df, j = in_sum_adj_col, value = in_sum_adj_vec)
+        }
 
-          # in_sum_temp
-          prod_X_col <- paste0("prod_X", count_controls, "_Ngt_XX")
-          in_sum_temp_col <- paste0("in_sum_temp_", count_controls, "_", l, "_XX")
+        # Batch by-group sum for all in_sum columns at once
+        in_sum_cols <- paste0("in_sum_", 1:count_controls, "_", l, "_XX")
+        df[, (in_sum_cols) := lapply(.SD, sum, na.rm = TRUE), by = "group_XX", .SDcols = in_sum_temp_cols]
 
-          # DOF adjustment
-          in_sum_adj_col <- paste0("in_sum_temp_adj_", count_controls, "_", l, "_XX")
-          df[, (in_sum_adj_col) := data.table::fifelse(
-            get(E_hat_denom_col) > 1L,
-            sqrt(get(E_hat_denom_col) / (get(E_hat_denom_col) - 1L)) - 1,
-            0.0
-          )]
-
-          df[, (in_sum_temp_col) :=
-            get(prod_X_col) *
-            (1.0 +
-              as.numeric(get(E_hat_denom_col) >= 2L) *
-              get(in_sum_adj_col)
-            ) *
-            (diff_y_XX - get(E_y_hat_col)) *
-            as.numeric(time_XX >= 2L & time_XX <= F_g_XX - 1L) /
-            get(N_c_col)
-          ]
-
-          # in_sum by group
-          in_sum_col <- paste0("in_sum_", count_controls, "_", l, "_XX")
-          df[, (in_sum_col) := sum(get(in_sum_temp_col), na.rm = TRUE), by = "group_XX"]
-
-          # Residualize outcome if useful_res > 1
-          useful_res_val <- get(paste0("useful_res_", l, "_XX"))
-          if (!is.null(useful_res_val) && useful_res_val > 1L) {
-            coefs_val <- get(paste0("coefs_sq_", l, "_XX"))[count_controls, 1L]
+        # Residualize outcome sequentially (preserves bit-exact results)
+        useful_res_val <- get(paste0("useful_res_", l, "_XX"))
+        if (!is.null(useful_res_val) && useful_res_val > 1L) {
+          for (j in seq_len(count_controls)) {
+            coefs_val <- get(paste0("coefs_sq_", l, "_XX"))[j, 1L]
 
             df[, (diff_y_col) := data.table::fifelse(
               d_sq_int_XX == l_num,
-              get(diff_y_col) - coefs_val * get(diff_X_col),
+              get(diff_y_col) - coefs_val * get(diff_X_cols[j]),
               get(diff_y_col)
             )]
 
-            in_brackets_col <- paste0("in_brackets_", l, "_", count_controls, "_XX")
+            in_brackets_col <- paste0("in_brackets_", l, "_", j, "_XX")
             df[, (in_brackets_col) := 0.0]
           }
         }
       }
+
+      # Clean up intermediate controls columns to prevent data.table bloat
+      # Keep: M_cols, in_sum_cols, in_brackets_cols (needed for variance adjustment)
+      # Drop: m_g, m, diff_X_N, in_sum_temp, E_hat_denom, in_sum_adj
+      drop_cols_ctrl <- c(
+        m_g_cols, m_cols, diff_X_N_cols, in_sum_temp_cols, diff_X_cols,
+        paste0("E_hat_denom_shared_", levels_d_sq_XX, "_XX"),
+        paste0("N_c_", levels_d_sq_XX, "_temp_XX")
+      )
+      for (l in levels_d_sq_XX) {
+        drop_cols_ctrl <- c(drop_cols_ctrl,
+          paste0("E_hat_denom_", 1:count_controls, "_", l, "_XX"),
+          paste0("in_sum_temp_adj_", 1:count_controls, "_", l, "_XX"))
+      }
+      dt_batch_drop_cols(df, drop_cols_ctrl)
     }
 
     # DOF and mean computations for variance
@@ -742,39 +777,39 @@ did_multiplegt_dyn_core <- function(
         (diff_y_vec - df[[E_hat_col]])
       data.table::set(df, j = U_Gg_temp_var_col, value = U_Gg_temp_var_vals)
 
-      # Controls adjustment for variance
+      # Controls adjustment for variance (matrix-vectorized)
       if (!is.null(controls)) {
         for (l in levels_d_sq_XX) {
           useful_res_val <- get(paste0("useful_res_", l, "_XX"))
           if (is.null(useful_res_val) || useful_res_val <= 1) next
 
           l_num <- as.numeric(l)
-          comb_col <- paste0("combined", increase_XX, "_temp_", l, "_", i, "_XX")
-          df[, (comb_col) := 0.0]
+          inv_Denom_l <- get(paste0("inv_Denom_", l, "_XX"))
+          coefs_l <- get(paste0("coefs_sq_", l, "_XX"))[, 1]
+          mask_vec <- as.numeric(df[["d_sq_int_XX"]] == l_num & df[["F_g_XX"]] >= 3)
 
+          # Extract in_sum columns into N x C matrix
+          in_sum_cols <- paste0("in_sum_", 1:count_controls, "_", l, "_XX")
+          in_sum_mat <- as.matrix(df[, ..in_sum_cols])
+
+          # in_brackets = (in_sum * mask) %*% t(inv_Denom) - coefs (broadcast)
+          in_brackets_mat <- (in_sum_mat * mask_vec) %*% t(inv_Denom_l)
+          in_brackets_mat <- t(t(in_brackets_mat) - coefs_l)
+
+          # Extract M columns into N x C matrix
+          M_cols <- paste0("M", increase_XX, "_", l, "_", 1:count_controls, "_", i, "_XX")
+          M_mat <- as.matrix(df[, ..M_cols])
+
+          # comb = rowSums(M * in_brackets), add to part2
+          part2_col <- cn$part2
+          data.table::set(df, j = part2_col,
+            value = df[[part2_col]] + rowSums(M_mat * in_brackets_mat))
+
+          # Write back in_brackets columns (needed for later covariance computations)
           for (j in 1:count_controls) {
             in_brackets_col <- paste0("in_brackets_", l, "_", j, "_XX")
-
-            for (k in 1:count_controls) {
-              in_sum_col <- paste0("in_sum_", k, "_", l, "_XX")
-              inv_val <- get(paste0("inv_Denom_", l, "_XX"))[j, k]
-
-              df[, (in_brackets_col) :=
-                get(in_brackets_col) +
-                inv_val * get(in_sum_col) *
-                as.numeric(d_sq_int_XX == l_num & F_g_XX >= 3)
-              ]
-            }
-
-            coef_val <- get(paste0("coefs_sq_", l, "_XX"))[j, 1]
-            df[, (in_brackets_col) := get(in_brackets_col) - coef_val]
-
-            M_col <- paste0("M", increase_XX, "_", l, "_", j, "_", i, "_XX")
-            df[, (comb_col) := get(comb_col) + get(M_col) * get(in_brackets_col)]
+            data.table::set(df, j = in_brackets_col, value = in_brackets_mat[, j])
           }
-
-          part2_col <- cn$part2
-          df[, (part2_col) := get(part2_col) + get(comb_col)]
         }
       }
 
@@ -1173,38 +1208,49 @@ compute_placebo_effects_dt <- function(
   dt_batch_drop_cols(df, pl_cols_to_drop)
 
   # Compute placebo long differences: shift(outcome, 2*i) - shift(outcome, i)
+  # Vectorized shift for placebo outcome
   diff_y_pl_col <- paste0("diff_y_pl_", i, "_XX")
-  df[, (diff_y_pl_col) := data.table::shift(outcome_XX, 2L * i) - data.table::shift(outcome_XX, i), by = "group_XX"]
+  N_rows_pl <- nrow(df)
+  group_vec_pl <- df[["group_XX"]]
+  fix_rows_2i <- dt_shift_boundary_rows(group_vec_pl, 2L * i, N_rows_pl)
+  fix_rows_1i <- dt_shift_boundary_rows(group_vec_pl, i, N_rows_pl)
+  outcome_vec <- df[["outcome_XX"]]
+  data.table::set(df, j = diff_y_pl_col,
+    value = dt_vec_shift(outcome_vec, 2L * i, fix_rows_2i, N_rows_pl) -
+            dt_vec_shift(outcome_vec, i, fix_rows_1i, N_rows_pl))
 
   # Residualize placebo outcome differences when controls are specified
   if (!is.null(controls) && length(controls) > 0L && !is.null(controls_globals)) {
-    count_controls <- 0L
-    for (var in controls) {
-      count_controls <- count_controls + 1L
-      diff_X_pl_col <- paste0("diff_X", count_controls, "_placebo_", i, "_XX")
+    count_controls <- length(controls)
 
-      # Compute long difference of control: shift(control, 2*i) - shift(control, i)
-      df[, (diff_X_pl_col) := data.table::shift(get(var), 2L * i) - data.table::shift(get(var), i), by = "group_XX"]
+    # Phase 1: Compute all placebo control differences (vectorized shift)
+    diff_X_pl_cols <- paste0("diff_X", 1:count_controls, "_placebo_", i, "_XX")
+    diff_X_pl_N_cols <- paste0("diff_X", 1:count_controls, "_pl_", i, "_N_XX")
+    N_gt_vec_pl <- df[["N_gt_XX"]]
+    for (j in seq_len(count_controls)) {
+      ctrl_vec <- df[[controls[j]]]
+      diff_vec <- dt_vec_shift(ctrl_vec, 2L * i, fix_rows_2i, N_rows_pl) -
+                  dt_vec_shift(ctrl_vec, i, fix_rows_1i, N_rows_pl)
+      data.table::set(df, j = diff_X_pl_cols[j], value = diff_vec)
+      data.table::set(df, j = diff_X_pl_N_cols[j], value = N_gt_vec_pl * diff_vec)
+    }
 
-      # Compute diff_X_pl_N = N_gt * diff_X_placebo
-      diff_X_pl_N_col <- paste0("diff_X", count_controls, "_pl_", i, "_N_XX")
-      df[, (diff_X_pl_N_col) := N_gt_XX * get(diff_X_pl_col)]
+    # Phase 2: Residualize sequentially (preserves bit-exact results)
+    for (l in levels_d_sq_XX) {
+      l_num <- as.numeric(l)
+      useful_res_name <- paste0("useful_res_", l, "_XX")
+      coefs_name <- paste0("coefs_sq_", l, "_XX")
 
-      # Residualize diff_y_pl for each baseline treatment level where useful_res > 1
-      for (l in levels_d_sq_XX) {
-        l_num <- as.numeric(l)
-        useful_res_name <- paste0("useful_res_", l, "_XX")
-        coefs_name <- paste0("coefs_sq_", l, "_XX")
+      if (useful_res_name %chin% names(controls_globals) &&
+          controls_globals[[useful_res_name]] > 1L &&
+          coefs_name %chin% names(controls_globals)) {
 
-        if (useful_res_name %chin% names(controls_globals) &&
-            controls_globals[[useful_res_name]] > 1L &&
-            coefs_name %chin% names(controls_globals)) {
-
-          coef_val <- controls_globals[[coefs_name]][count_controls, 1L]
+        for (j in seq_len(count_controls)) {
+          coef_val <- controls_globals[[coefs_name]][j, 1L]
 
           df[, (diff_y_pl_col) := data.table::fifelse(
             d_sq_int_XX == l_num,
-            get(diff_y_pl_col) - coef_val * get(diff_X_pl_col),
+            get(diff_y_pl_col) - coef_val * get(diff_X_pl_cols[j]),
             get(diff_y_pl_col)
           )]
         }
@@ -1273,49 +1319,57 @@ compute_placebo_effects_dt <- function(
     df[, (part2_pl_col) := 0.0]
 
     count_controls <- length(controls)
-    control_idx <- 0L
-    for (var in controls) {
-      control_idx <- control_idx + 1L
-      diff_X_pl_N_col <- paste0("diff_X", control_idx, "_pl_", i, "_N_XX")
+    diff_X_pl_N_cols <- paste0("diff_X", 1:count_controls, "_pl_", i, "_N_XX")
 
-      for (l in levels_d_sq_XX) {
-        l_num <- as.numeric(l)
-        useful_res_name <- paste0("useful_res_", l, "_XX")
+    for (l in levels_d_sq_XX) {
+      l_num <- as.numeric(l)
+      useful_res_name <- paste0("useful_res_", l, "_XX")
 
-        # m_pl_g column
-        m_pl_g_col <- paste0("m", increase_XX, "_pl_g_", l, "_", control_idx, "_", i, "_XX")
+      m_pl_g_cols <- paste0("m", increase_XX, "_pl_g_", l, "_", 1:count_controls, "_", i, "_XX")
+      m_pl_cols <- paste0("m_pl", increase_XX, "_", l, "_", 1:count_controls, "_", i, "_XX")
+      M_pl_cols <- paste0("M_pl", increase_XX, "_", l, "_", 1:count_controls, "_", i, "_XX")
 
-        if (N_pl_val > 0L) {
-          # Safe division to avoid 0/0 = NaN
-          safe_ratio_m_pl <- data.table::fifelse(df[[N_gt_ctrl_pl_col]] == 0L, 0, df[[N_t_pl_g_col]] / df[[N_gt_ctrl_pl_col]])
-          df[, (m_pl_g_col) :=
-            as.numeric(i <= T_g_XX - 2L & d_sq_int_XX == l_num) *
-            (G_XX / N_pl_val) *
-            (get(dist_pl_col) - safe_ratio_m_pl * get(never_pl_col)) *
-            as.numeric(time_XX >= i + 1 & time_XX <= T_g_XX) *
-            get(diff_X_pl_N_col)
-          ]
-        } else {
-          df[, (m_pl_g_col) := 0.0]
+      if (N_pl_val > 0L) {
+        # Shared: safe_ratio and common factor (same for all controls)
+        safe_ratio_m_pl <- data.table::fifelse(df[[N_gt_ctrl_pl_col]] == 0L, 0, df[[N_t_pl_g_col]] / df[[N_gt_ctrl_pl_col]])
+        common_m_pl <- as.numeric(df[["d_sq_int_XX"]] == l_num & i <= df[["T_g_XX"]] - 2L) *
+          (G_XX / N_pl_val) *
+          (df[[dist_pl_col]] - safe_ratio_m_pl * df[[never_pl_col]]) *
+          as.numeric(df[["time_XX"]] >= i + 1L & df[["time_XX"]] <= df[["T_g_XX"]])
+
+        # Compute all m_pl_g columns: m_pl_g_j = common_m_pl * diff_X_pl_N_j
+        for (j in seq_len(count_controls)) {
+          data.table::set(df, j = m_pl_g_cols[j], value = common_m_pl * df[[diff_X_pl_N_cols[j]]])
         }
+      } else {
+        for (j in seq_len(count_controls)) {
+          data.table::set(df, j = m_pl_g_cols[j], value = 0.0)
+        }
+      }
 
-        # Sum by group
-        m_pl_col <- paste0("m_pl", increase_XX, "_", l, "_", control_idx, "_", i, "_XX")
-        df[, (m_pl_col) := sum(get(m_pl_g_col), na.rm = TRUE), by = "group_XX"]
+      # Batch by-group sum for all m_pl columns at once
+      df[, (m_pl_cols) := lapply(.SD, sum, na.rm = TRUE), by = "group_XX", .SDcols = m_pl_g_cols]
 
-        # Set NA where not first_obs
-        df[first_obs_by_gp_XX != 1L, (m_pl_col) := NA_real_]
+      # Set NA where not first_obs (batch)
+      not_first_idx <- which(df[["first_obs_by_gp_XX"]] != 1L)
+      if (length(not_first_idx) > 0L) {
+        for (j in seq_len(count_controls)) {
+          data.table::set(df, i = not_first_idx, j = m_pl_cols[j], value = NA_real_)
+        }
+      }
 
-        # M_pl (scalar mean)
-        M_pl_col <- paste0("M_pl", increase_XX, "_", l, "_", control_idx, "_", i, "_XX")
-        M_pl_val <- dt_scalar_sum(df, m_pl_col) / G_XX
-        data.table::set(df, j = M_pl_col, value = M_pl_val)
+      # Compute all M_pl scalars
+      for (j in seq_len(count_controls)) {
+        M_pl_val_j <- sum(df[[m_pl_cols[j]]], na.rm = TRUE) / G_XX
+        data.table::set(df, j = M_pl_cols[j], value = M_pl_val_j)
+      }
 
-        # Initialize in_brackets_pl for later use
-        if (useful_res_name %chin% names(controls_globals) &&
-            controls_globals[[useful_res_name]] > 1L) {
-          in_brackets_pl_col <- paste0("in_brackets_pl_", l, "_", control_idx, "_XX")
-          df[, (in_brackets_pl_col) := 0.0]
+      # Initialize in_brackets_pl columns
+      if (useful_res_name %chin% names(controls_globals) &&
+          controls_globals[[useful_res_name]] > 1L) {
+        for (j in seq_len(count_controls)) {
+          in_brackets_pl_col <- paste0("in_brackets_pl_", l, "_", j, "_XX")
+          data.table::set(df, j = in_brackets_pl_col, value = 0.0)
         }
       }
     }
@@ -1459,7 +1513,7 @@ compute_placebo_effects_dt <- function(
     U_Gg_pl_var_col <- paste0("U_Gg_pl_", i, "_var_XX")
     df[, (U_Gg_pl_var_col) := sum(get(U_Gg_pl_temp_var_col), na.rm = TRUE), by = "group_XX"]
 
-    # Controls adjustment for placebo variance
+    # Controls adjustment for placebo variance (matrix-vectorized)
     if (!is.null(controls) && length(controls) > 0L && !is.null(controls_globals)) {
       part2_pl_col <- paste0("part2_pl_switch", increase_XX, "_", i, "_XX")
       # Reset part2_pl_switch to 0 before accumulating
@@ -1472,48 +1526,43 @@ compute_placebo_effects_dt <- function(
             controls_globals[[useful_res_name]] <= 1L) next
 
         l_num <- as.numeric(l)
-        comb_pl_col <- paste0("combined_pl", increase_XX, "_temp_", l, "_", i, "_XX")
-        df[, (comb_pl_col) := 0.0]
+        inv_denom_name <- paste0("inv_Denom_", l, "_XX")
+        coefs_name <- paste0("coefs_sq_", l, "_XX")
 
+        if (!(inv_denom_name %chin% names(controls_globals))) next
+        inv_Denom_l <- controls_globals[[inv_denom_name]]
+        mask_vec <- as.numeric(df[["d_sq_int_XX"]] == l_num & df[["F_g_XX"]] >= 3L)
+
+        # Extract in_sum columns into N x C matrix
+        in_sum_cols <- paste0("in_sum_", 1:count_controls, "_", l, "_XX")
+        in_sum_avail <- in_sum_cols %chin% names(df)
+        if (!all(in_sum_avail)) next
+        in_sum_mat <- as.matrix(df[, ..in_sum_cols])
+
+        # in_brackets = (in_sum * mask) %*% t(inv_Denom) - coefs (broadcast)
+        in_brackets_mat <- (in_sum_mat * mask_vec) %*% t(inv_Denom_l)
+        if (coefs_name %chin% names(controls_globals)) {
+          coefs_l <- controls_globals[[coefs_name]][, 1]
+          in_brackets_mat <- t(t(in_brackets_mat) - coefs_l)
+        }
+
+        # Extract M_pl columns into N x C matrix
+        M_pl_cols <- paste0("M_pl", increase_XX, "_", l, "_", 1:count_controls, "_", i, "_XX")
+        M_pl_avail <- M_pl_cols %chin% names(df)
+        if (!all(M_pl_avail)) next
+        M_pl_mat <- as.matrix(df[, ..M_pl_cols])
+
+        # comb = rowSums(M_pl * in_brackets), add to part2_pl
+        data.table::set(df, j = part2_pl_col,
+          value = df[[part2_pl_col]] + rowSums(M_pl_mat * in_brackets_mat))
+
+        # Write back in_brackets_pl columns (for consistency with downstream code)
         for (j in 1:count_controls) {
           in_brackets_pl_col <- paste0("in_brackets_pl_", l, "_", j, "_XX")
           if (in_brackets_pl_col %chin% names(df)) {
-            # Reset in_brackets_pl
-            df[, (in_brackets_pl_col) := 0.0]
-
-            # Add inv_Denom terms
-            inv_denom_name <- paste0("inv_Denom_", l, "_XX")
-            if (inv_denom_name %chin% names(controls_globals)) {
-              for (k in 1:count_controls) {
-                in_sum_col <- paste0("in_sum_", k, "_", l, "_XX")
-                if (in_sum_col %chin% names(df)) {
-                  inv_denom_jk <- controls_globals[[inv_denom_name]][j, k]
-                  df[, (in_brackets_pl_col) := data.table::fifelse(
-                    (d_sq_int_XX == l_num) & (F_g_XX >= 3L),
-                    get(in_brackets_pl_col) + inv_denom_jk * get(in_sum_col),
-                    get(in_brackets_pl_col)
-                  )]
-                }
-              }
-
-              # Subtract coef
-              coefs_name <- paste0("coefs_sq_", l, "_XX")
-              if (coefs_name %chin% names(controls_globals)) {
-                coef_val <- controls_globals[[coefs_name]][j, 1]
-                df[, (in_brackets_pl_col) := get(in_brackets_pl_col) - coef_val]
-              }
-
-              # Add to combined_pl
-              M_pl_col <- paste0("M_pl", increase_XX, "_", l, "_", j, "_", i, "_XX")
-              if (M_pl_col %chin% names(df)) {
-                df[, (comb_pl_col) := get(comb_pl_col) + get(M_pl_col) * get(in_brackets_pl_col)]
-              }
-            }
+            data.table::set(df, j = in_brackets_pl_col, value = in_brackets_mat[, j])
           }
         }
-
-        # Add to part2_pl_switch
-        df[, (part2_pl_col) := get(part2_pl_col) + get(comb_pl_col)]
       }
 
       # Subtract part2_pl_switch from U_Gg_pl_var
